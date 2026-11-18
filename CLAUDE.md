@@ -37,7 +37,19 @@ Delegation is a hard constraint, not a preference:
 - The orchestrating session does not write source code under `src/` directly.
 - **commit** stages and commits; **release-manager** owns git flow branches and releases.
   Pushing stays with the human unless they ask for it.
-- Work happens on `feature/*` branches off `develop`.
+- Work happens on `feature/*` branches off `develop`, each in its own git worktree under
+  `.worktrees/`. Symlink `local-fixtures` (so local tests run) and the devenv-generated
+  `.pre-commit-config.yaml` (so the commit hooks run) from the main checkout into the
+  worktree.
+
+## Testing (strict TDD)
+
+- Write a test for every change before changing the code.
+- Run it and watch it fail, for the right reason. Never trust a test you haven't seen fail.
+- Write the simplest code that makes it pass. When the code needs to be more advanced,
+  add another failing test first.
+- The tests check the code, and the code checks the tests.
+- Implementers report each test they saw fail before implementing.
 
 ## Environment
 
