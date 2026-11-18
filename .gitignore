@@ -27,3 +27,6 @@ devenv.local.yaml
 *.aiff
 *.aif
 *.m4a
+
+# Local-only fixtures (real library metadata, never committed)
+/local-fixtures/
