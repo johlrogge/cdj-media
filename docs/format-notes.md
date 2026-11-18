@@ -96,5 +96,15 @@ rekordbox-exported, CDJ-played stick.
     hashed directory name plus numbered collisions. In one of the two directories
     `ANLZ0000.DAT`/`.EXT` don't exist on the stick, so a track row can point at analysis
     files that are missing.
+  - Slot 20 (file path) is `/Contents/<artist>/<album>/<file name>` on all 827 rows (4
+    components, at most 140 UTF-16 units). rekordbox replaces `/ : ? " |` in artist and
+    album names with `_`, and a trailing `.` too; it cuts every component to 48 UTF-16
+    units (file names keep their extension, and a cut stem may end in a space; a cut
+    directory loses a trailing space). No component ends in a dot or a space. A track
+    with no artist goes under `UnknownArtist`, one with no album under `UnknownAlbum`.
+    `layout::ContentPath` gives back all 827 paths from the artist and album names and
+    the file name (ADR-010).
+  - `PPTH` in each `.DAT` and `.EXT` equals the track's slot 20, on all 826 tracks whose
+    analysis files exist.
   - Non-zero gap bytes occur only before slots 17, 19 and 20 (30 rows).
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).
