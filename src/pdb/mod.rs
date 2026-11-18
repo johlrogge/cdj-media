@@ -21,13 +21,23 @@
 //! [`Pdb::from_bytes`] follows every chain and decodes each page it reaches, so errors are
 //! reported at load time with absolute offsets. Rows are not typed at this layer: a
 //! [`RawRow`] is a present row's offset and the heap from there on.
+//!
+//! The rows of the small tables are typed from a [`RawRow`] with [`ExportRow::decode`] or
+//! each type's `decode` ([`Genre`], [`Artist`], [`Album`], [`Label`], [`Key`], [`Color`],
+//! [`Artwork`]), and encode back to exactly the row's bytes. A typed row ends after its
+//! last string; the padding after it stays in the page heap.
 
+pub(crate) mod defaults;
 mod file;
+mod ids;
 mod page;
+mod rows;
 mod table;
 #[cfg(test)]
 mod testutil;
 
 pub use file::Pdb;
+pub use ids::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId};
 pub use page::{DataBody, IndexBody, Page, PageBody, RawRow, RowGroup};
+pub use rows::{Album, Artist, Artwork, Color, ExportRow, Genre, Key, Label};
 pub use table::{ExportTable, TablePointer, UnknownTable};

@@ -216,10 +216,12 @@ impl Page {
                     .filter(|&(i, _)| group.rowpf & (1 << i) != 0)
                     .map(|(_, &offset)| offset)
             })
-            .map(move |offset| RawRow {
-                offset,
-                bytes: heap.get(usize::from(offset)..).unwrap_or_default(),
-                at: heap_at.saturating_add(u64::from(offset)),
+            .map(move |offset| {
+                RawRow::new(
+                    offset,
+                    heap.get(usize::from(offset)..).unwrap_or_default(),
+                    heap_at.saturating_add(u64::from(offset)),
+                )
             })
     }
 
@@ -446,6 +448,16 @@ impl RowGroup {
 }
 
 impl<'a> RawRow<'a> {
+    /// A row at heap offset `offset`, whose `bytes` start at absolute file offset `at`.
+    pub(crate) fn new(offset: u16, bytes: &'a [u8], at: u64) -> Self {
+        Self { offset, bytes, at }
+    }
+
+    /// A reader over the row's bytes, reporting absolute file offsets.
+    pub(crate) fn reader(&self) -> Reader<'a> {
+        Reader::with_base(self.bytes, self.at)
+    }
+
     /// The row's offset from the heap start, as stored in the row index.
     pub fn offset(&self) -> u16 {
         self.offset
@@ -454,7 +466,8 @@ impl<'a> RawRow<'a> {
     /// The heap from the row's offset to the end of the heap.
     ///
     /// The row's length is not known at this layer, so this runs past the row into
-    /// whatever follows it; typed rows (a later slice) know where each row ends.
+    /// whatever follows it; typed rows ([`ExportRow`](super::ExportRow)) know where each
+    /// row ends.
     pub fn bytes(&self) -> &'a [u8] {
         self.bytes
     }
