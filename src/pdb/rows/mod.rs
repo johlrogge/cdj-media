@@ -1,25 +1,30 @@
-//! Typed rows of the small `export.pdb` tables (ADR-005, ADR-006, ADR-007).
+//! Typed rows of the `export.pdb` track table and small tables (ADR-005, ADR-006,
+//! ADR-007).
 
 mod album;
 mod artist;
 mod inline;
 mod tail;
+mod track;
 
 pub use album::Album;
 pub use artist::Artist;
 pub use inline::{Artwork, Color, Genre, Key, Label};
+pub use track::{FileType, OtherFileType, Track, TrackFields, TrackString};
 
 use super::{ExportTable, RawRow};
 use crate::error::{DecodeError, EncodeError};
 use tail::{Layout, NameTail, TailContexts, read_id};
 
-/// A typed row of one of the small `export.pdb` tables.
+/// A typed row of the track table or one of the small `export.pdb` tables.
 ///
 /// Each variant's row ends after its last string; what follows it in the heap (zero
 /// padding in rekordbox's files) belongs to the page, not to the row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExportRow {
+    /// A row of [`ExportTable::Tracks`].
+    Track(Track),
     /// A row of [`ExportTable::Genres`].
     Genre(Genre),
     /// A row of [`ExportTable::Artists`].
@@ -38,13 +43,14 @@ pub enum ExportRow {
 
 impl ExportRow {
     /// Decodes `row` as a row of `table`; `None` for tables whose rows are not typed yet
-    /// (tracks, playlists, history and the unnamed tables).
+    /// (playlists, history and the unnamed tables).
     ///
     /// # Errors
     ///
     /// The errors of the table's row type, at absolute offsets.
     pub fn decode(table: ExportTable, row: &RawRow<'_>) -> Result<Option<Self>, DecodeError> {
         Ok(Some(match table {
+            ExportTable::Tracks => Self::Track(Track::decode(row)?),
             ExportTable::Genres => Self::Genre(Genre::decode(row)?),
             ExportTable::Artists => Self::Artist(Artist::decode(row)?),
             ExportTable::Albums => Self::Album(Album::decode(row)?),
@@ -52,8 +58,7 @@ impl ExportRow {
             ExportTable::Keys => Self::Key(Key::decode(row)?),
             ExportTable::Colors => Self::Color(Color::decode(row)?),
             ExportTable::Artwork => Self::Artwork(Artwork::decode(row)?),
-            ExportTable::Tracks
-            | ExportTable::PlaylistTree
+            ExportTable::PlaylistTree
             | ExportTable::PlaylistEntries
             | ExportTable::HistoryPlaylists
             | ExportTable::HistoryEntries
@@ -70,6 +75,7 @@ impl ExportRow {
     /// The errors of the row type's `encode`.
     pub fn encode(&self) -> Result<Vec<u8>, EncodeError> {
         match self {
+            Self::Track(row) => row.encode(),
             Self::Genre(row) => row.encode(),
             Self::Artist(row) => row.encode(),
             Self::Album(row) => row.encode(),
@@ -98,11 +104,22 @@ pub(crate) mod testutil {
 mod tests {
     use super::testutil::{AT, raw};
     use super::*;
-    use crate::pdb::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId};
+    use crate::pdb::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, TrackId};
 
     /// One built row of every typed table.
     fn built_rows() -> Vec<(ExportTable, ExportRow)> {
+        let track = TrackFields {
+            title: "Jóga".into(),
+            isrc: "GBAYE9700001".into(),
+            artist_id: ArtistId::new(2),
+            album_id: AlbumId::new(3),
+            ..TrackFields::default()
+        };
         vec![
+            (
+                ExportTable::Tracks,
+                ExportRow::Track(Track::new(TrackId::new(8).unwrap(), track).unwrap()),
+            ),
             (
                 ExportTable::Genres,
                 ExportRow::Genre(Genre::new(GenreId::new(1).unwrap(), "House")),
@@ -151,7 +168,6 @@ mod tests {
     #[test]
     fn untyped_tables_decode_to_none() {
         for table in [
-            ExportTable::Tracks,
             ExportTable::PlaylistTree,
             ExportTable::History,
             ExportTable::from_u32(9),
@@ -164,6 +180,8 @@ mod tests {
     fn decode_errors_come_from_the_row_type() {
         let e = ExportRow::decode(ExportTable::Labels, &raw(&[0, 0, 0, 0, 3])).unwrap_err();
         assert_eq!((e.offset, e.context), (AT, "pdb label id"));
+        let e = ExportRow::decode(ExportTable::Tracks, &raw(&[0; 0x42])).unwrap_err();
+        assert_eq!((e.offset, e.context), (AT + 0x40, "pdb track album_id"));
     }
 
     mod properties {
@@ -172,7 +190,8 @@ mod tests {
 
         use super::*;
 
-        const TABLES: [ExportTable; 7] = [
+        const TABLES: [ExportTable; 8] = [
+            ExportTable::Tracks,
             ExportTable::Genres,
             ExportTable::Artists,
             ExportTable::Albums,

@@ -301,11 +301,8 @@ impl Color {
         // Like `read_id`, but the colour id is a `u16`; one call site doesn't justify a
         // generic reader.
         let id_at = r.position();
-        let id = ColorId::new(r.u16_le().context(ID)?).ok_or(DecodeError::new(
-            id_at,
-            ID,
-            DecodeErrorKind::InvalidValue,
-        ))?;
+        let id = ColorId::new(r.u16_le().context(ID)?)
+            .ok_or_else(|| DecodeError::new(id_at, ID, DecodeErrorKind::InvalidValue))?;
         let unknown3 = r.u8().context("pdb color unknown3")?;
         let name = devicesql::decode(&mut r)?;
         Ok(Self {

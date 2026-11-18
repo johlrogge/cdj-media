@@ -22,10 +22,11 @@
 //! reported at load time with absolute offsets. Rows are not typed at this layer: a
 //! [`RawRow`] is a present row's offset and the heap from there on.
 //!
-//! The rows of the small tables are typed from a [`RawRow`] with [`ExportRow::decode`] or
-//! each type's `decode` ([`Genre`], [`Artist`], [`Album`], [`Label`], [`Key`], [`Color`],
-//! [`Artwork`]), and encode back to exactly the row's bytes. A typed row ends after its
-//! last string; the padding after it stays in the page heap.
+//! The rows of the track table and the small tables are typed from a [`RawRow`] with
+//! [`ExportRow::decode`] or each type's `decode` ([`Track`], [`Genre`], [`Artist`],
+//! [`Album`], [`Label`], [`Key`], [`Color`], [`Artwork`]), and encode back to exactly the
+//! row's bytes. A typed row ends after its last string; the padding after it stays in the
+//! page heap.
 
 pub(crate) mod defaults;
 mod file;
@@ -37,7 +38,10 @@ mod table;
 mod testutil;
 
 pub use file::Pdb;
-pub use ids::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId};
+pub use ids::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, TrackId};
 pub use page::{DataBody, IndexBody, Page, PageBody, RawRow, RowGroup};
-pub use rows::{Album, Artist, Artwork, Color, ExportRow, Genre, Key, Label};
+pub use rows::{
+    Album, Artist, Artwork, Color, ExportRow, FileType, Genre, Key, Label, OtherFileType, Track,
+    TrackFields, TrackString,
+};
 pub use table::{ExportTable, TablePointer, UnknownTable};

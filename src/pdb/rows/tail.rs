@@ -20,7 +20,7 @@ pub(super) fn read_id<T>(
 ) -> Result<T, DecodeError> {
     let at = r.position();
     let value = r.u32_le().context(context)?;
-    new(value).ok_or(DecodeError::new(at, context, DecodeErrorKind::InvalidValue))
+    new(value).ok_or_else(|| DecodeError::new(at, context, DecodeErrorKind::InvalidValue))
 }
 
 /// Which layout an artist or album row's marker and name offset use, chosen by its
@@ -118,11 +118,9 @@ impl NameTail {
         let gap_len = u64::from(offset)
             .checked_sub(fixed)
             .and_then(|len| usize::try_from(len).ok())
-            .ok_or(DecodeError::new(
-                offset_at,
-                ctx.offset,
-                DecodeErrorKind::InvalidValue,
-            ))?;
+            .ok_or_else(|| {
+                DecodeError::new(offset_at, ctx.offset, DecodeErrorKind::InvalidValue)
+            })?;
         let gap = r.bytes(gap_len).context(ctx.gap)?.to_vec();
         let name = devicesql::decode(r)?;
         Ok(Self { marker, gap, name })
