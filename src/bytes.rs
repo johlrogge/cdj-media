@@ -71,10 +71,6 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a little-endian `u32`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u32_le(&mut self) -> Result<u32, DecodeError> {
         self.array_in("u32_le").map(u32::from_le_bytes)
     }
@@ -127,10 +123,6 @@ impl<'a> Reader<'a> {
     ///
     /// `abs` may be anywhere from the start of this reader's slice up to and including its
     /// end. Anything else fails with [`DecodeErrorKind::InvalidValue`] at offset `abs`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn seek(&mut self, abs: u64) -> Result<(), DecodeError> {
         let target = abs
             .checked_sub(self.base)
@@ -281,10 +273,6 @@ impl Writer {
     }
 
     /// Writes a little-endian `u32`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u32_le(&mut self, value: u32) {
         self.bytes(&value.to_le_bytes());
     }
