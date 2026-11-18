@@ -20,13 +20,26 @@ devenv.local.yaml
 .claude/settings.local.json
 .mcp.json
 
-# Never commit audio
-*.flac
-*.wav
+# Never commit audio (keep in sync with AUDIO_EXTENSIONS in tests/no_audio.rs)
 *.mp3
+*.mp2
+*.wav
+*.flac
 *.aiff
 *.aif
+*.aifc
 *.m4a
+*.mp4
+*.aac
+*.ogg
+*.opus
+*.alac
+*.wma
+*.caf
+*.dsf
+*.dff
+*.ape
+*.wv
 
 # Local-only fixtures (real library metadata, never committed)
 /local-fixtures/
