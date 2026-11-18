@@ -500,11 +500,9 @@ impl<'a> RawRow<'a> {
         let at = self
             .at
             .saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));
-        let bytes = self.bytes.get(offset..).ok_or(DecodeError::new(
-            at,
-            "pdb row string offset",
-            DecodeErrorKind::InvalidValue,
-        ))?;
+        let bytes = self.bytes.get(offset..).ok_or_else(|| {
+            DecodeError::new(at, "pdb row string offset", DecodeErrorKind::InvalidValue)
+        })?;
         Ok(Reader::with_base(bytes, at))
     }
 }

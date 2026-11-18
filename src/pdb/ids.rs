@@ -1,7 +1,8 @@
 //! Row ids of the `export.pdb` tables.
 //!
 //! djl-analysis uses id 0 for "none" in references, and no row of the real-stick fixture
-//! has id 0 (1,394 rows in tables 1 to 6 and 13, checked by `tests/pdb_rows_local.rs`), so
+//! has id 0 (827 track rows and 1,394 rows in tables 1 to 6 and 13, checked by
+//! `tests/pdb_rows_local.rs`), so
 //! ids are non-zero. A reference that may be empty, such as an album's artist, is an
 //! `Option` of an id.
 
@@ -29,6 +30,12 @@ macro_rules! id {
             }
         }
     };
+}
+
+id! {
+    /// The id of a track row (table 0). No track row of the real-stick fixture has id 0
+    /// (827 rows).
+    TrackId(NonZeroU32, u32)
 }
 
 id! {
@@ -82,6 +89,7 @@ mod tests {
         assert_eq!(KeyId::new(0), None);
         assert_eq!(ColorId::new(0), None);
         assert_eq!(ArtworkId::new(0), None);
+        assert_eq!(TrackId::new(0), None);
     }
 
     proptest! {
@@ -93,6 +101,7 @@ mod tests {
             prop_assert_eq!(LabelId::new(value).map(LabelId::get), Some(value));
             prop_assert_eq!(KeyId::new(value).map(KeyId::get), Some(value));
             prop_assert_eq!(ArtworkId::new(value).map(ArtworkId::get), Some(value));
+            prop_assert_eq!(TrackId::new(value).map(TrackId::get), Some(value));
             prop_assert_eq!(ColorId::new(small).map(ColorId::get), Some(small));
         }
     }
