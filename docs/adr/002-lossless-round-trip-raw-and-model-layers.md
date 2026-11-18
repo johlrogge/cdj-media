@@ -1,6 +1,6 @@
 # ADR-002: Lossless round-trip with separate raw and model layers
 ## Status
-Proposed
+Accepted
 ## Decision
 Two layers:
 - **Raw layer** (`Pdb`, `AnlzFile` with `Tag`, `RawTag`, `RawRow`) mirrors the format and
