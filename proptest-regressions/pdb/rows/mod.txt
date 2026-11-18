@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a1004ccf53d0d86c8915846e39b5f00d3a2788899b0972ad13dc13ec77866bf0 # shrinks to subtype = 96, id = 1, offset = 11, flag = 3, rest = []
+cc 2c43af3b9e920c7fbc7dc7c86332c245acfc8d59de65672c854ab4391fc5e294 # shrinks to (table, row) = (Artists, Artist(Artist { subtype: 96, index_shift: 0, id: ArtistId(1), tail: NameTail { marker: 0, gap: [1], name: DeviceSqlString { repr: ShortAscii, text: "" } } }))
+cc d2eb454631d2dadae17ef6a36ede64248a0b06deac3625d3fcf54cb9d9ca6755 # shrinks to bytes = [0, 0, 0, 1, 0, 0, 0, 2, 3]
+cc 8c50b5c5f6fb68745b46b2f92f8eb4b42996868552af738d4d0c454526dca1a1 # shrinks to (table, row) = (Albums, Album(Album { subtype: 128, index_shift: 0, unknown1: 0, artist_id: None, id: AlbumId(1), unknown2: 0, tail: NameTail { marker: 0, gap: [], name: DeviceSqlString { repr: ShortAscii, text: "" } } }))

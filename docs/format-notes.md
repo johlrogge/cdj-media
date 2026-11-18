@@ -51,4 +51,26 @@ rekordbox-exported, CDJ-played stick.
   rule holds without exception across the 16,540 consecutive string pairs in track rows.
   The 0–3 gap bytes are **not** always zero (245 zero, about 100 leftover ASCII), so a
   lossless raw row has to store them.
+- **Small-table rows** (genres, artists, albums, labels, keys, colours, artwork; 1,394
+  rows, checked by `tests/pdb_rows_local.rs`):
+  - No row has id 0.
+  - Every artist row is near (subtype 0x60, all 277) and every album row is near (0x80,
+    all 239); the far layouts never occur. The rows whose name starts at +12 (17
+    artists) or +24 (14 albums) are near rows with a long-form (UTF-16LE) name, which the
+    alignment rule above puts at the next multiple of 4 after two zero gap bytes. The byte before the name offset is 3 in all of them.
+  - Artist and album `index_shift` is 0x20 × the row's slot in its page's row index,
+    absent rows included (all 516 rows; the present-row index gives it in only 480).
+  - Album `unknown1` and `unknown2` are 0 in all rows.
+  - Colour rows match djl-analysis' offsets: `unknown1` (u32) 0, the byte at +4 equal to
+    the id, the id as a u16 at +5 (1 to 8, no row for 0), the byte at +7 0, the name at
+    +8.
+  - Key `id2` equals the id in 42 of 43 rows; key 44 ("2B") has `id2` 43.
+  - Every row starts at a heap offset that is a multiple of 4. After a genre, label,
+    key, colour or artwork row, the next row starts at the next multiple of 4. After an
+    artist or album row there are 4 more bytes: the next row starts at
+    `align4(far fixed length + name length) + 4` from the row start, where the far fixed
+    length is 12 (artist) or 24 (album), as if the row were far. The last row's padding
+    is inside `used_size`. Padding bytes are zero, except on 4 pages (77, 78, 80, 81)
+    where rows were rewritten in place: there the space after a row holds leftover text
+    of a longer, earlier version, and the next row may start further on.
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).
