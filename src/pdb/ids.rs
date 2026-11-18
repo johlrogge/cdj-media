@@ -29,6 +29,13 @@ macro_rules! id {
                 self.0.get()
             }
         }
+
+        impl From<$name> for u32 {
+            /// The raw value, widened to `u32` for the narrower colour id.
+            fn from(id: $name) -> u32 {
+                u32::from(id.get())
+            }
+        }
     };
 }
 
@@ -90,6 +97,18 @@ mod tests {
         assert_eq!(ColorId::new(0), None);
         assert_eq!(ArtworkId::new(0), None);
         assert_eq!(TrackId::new(0), None);
+    }
+
+    #[test]
+    fn every_id_converts_to_its_raw_u32() {
+        assert_eq!(u32::from(TrackId::new(70_000).unwrap()), 70_000);
+        assert_eq!(u32::from(GenreId::new(1).unwrap()), 1);
+        assert_eq!(u32::from(ArtistId::new(2).unwrap()), 2);
+        assert_eq!(u32::from(AlbumId::new(3).unwrap()), 3);
+        assert_eq!(u32::from(LabelId::new(4).unwrap()), 4);
+        assert_eq!(u32::from(KeyId::new(5).unwrap()), 5);
+        assert_eq!(u32::from(ColorId::new(0x1234).unwrap()), 0x1234);
+        assert_eq!(u32::from(ArtworkId::new(7).unwrap()), 7);
     }
 
     proptest! {

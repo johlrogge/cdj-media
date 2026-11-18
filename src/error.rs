@@ -106,6 +106,13 @@ pub enum DecodeErrorKind {
         /// The page visited a second time.
         page: u32,
     },
+    /// A row has the same id as an earlier row of its table.
+    #[error("duplicate id {id}")]
+    #[non_exhaustive]
+    DuplicateId {
+        /// The id both rows have.
+        id: u32,
+    },
 }
 
 /// Failure to encode a value into bytes.
@@ -197,6 +204,19 @@ mod tests {
     fn context_leaves_ok_untouched() {
         let result: Result<u8, DecodeError> = Ok(7);
         assert_eq!(result.context("anything"), Ok(7));
+    }
+
+    #[test]
+    fn duplicate_id_message_shows_the_id() {
+        let err = DecodeError::new(
+            0x1048,
+            "pdb track id",
+            DecodeErrorKind::DuplicateId { id: 8 },
+        );
+        assert_eq!(
+            err.to_string(),
+            "pdb track id at offset 0x1048: duplicate id 8"
+        );
     }
 
     #[test]
