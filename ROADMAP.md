@@ -11,6 +11,7 @@ Read and write a USB export that these players accept, without rekordbox:
 - [ ] PWV3, if the NXS reads it
 - [ ] Pioneer encodings: waveform bytes, key table, string forms
 - [ ] `PIONEER/` and `/Contents/Artist/Album` path layout
+- [ ] Read back what the CDJ writes to the stick: play sessions (history), marks, deletions
 
 Fixtures are metadata and analysis output exported by rekordbox from real tracks,
 never audio. Cross-check against Deep Symmetry's djl-analysis (and rekordcrate as a

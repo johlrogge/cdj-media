@@ -17,6 +17,7 @@ devenv.local.yaml
 .claude/commands/migrate.md
 .claude/worktrees/
 .claude/settings.json
+.claude/settings.local.json
 .mcp.json
 
 # Never commit audio
