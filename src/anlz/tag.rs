@@ -13,6 +13,7 @@
 
 use std::fmt;
 
+use super::{AudioPath, BeatGrid, CueList};
 use crate::bytes::{Reader, Writer};
 use crate::error::{DecodeContext, DecodeError, DecodeErrorKind, EncodeError};
 
@@ -66,6 +67,14 @@ impl FourCc {
     pub const fn to_bytes(self) -> [u8; 4] {
         self.0
     }
+
+    /// Whether this crate decodes tags with this code into a typed [`Tag`] variant rather
+    /// than [`Tag::Raw`]: `PPTH`, `PQTZ` and `PCOB`.
+    pub const fn is_typed(self) -> bool {
+        // Keep in step with the match in `Tag::decode`: every code it types is listed here,
+        // or `RawTag::new` would accept a code that decodes as a typed variant.
+        matches!(&self.0, b"PPTH" | b"PQTZ" | b"PCOB")
+    }
 }
 
 impl From<[u8; 4]> for FourCc {
@@ -89,11 +98,19 @@ impl fmt::Debug for FourCc {
 
 /// One tag of an ANLZ file.
 ///
-/// Tags this crate does not type yet are kept verbatim as [`Tag::Raw`].
+/// `PPTH`, `PQTZ` and `PCOB` are decoded into typed variants (see ADR-004); a tag with one
+/// of those codes that does not parse is a decode error, never a [`Tag::Raw`]. Every other
+/// tag is kept verbatim as [`Tag::Raw`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Tag {
-    /// A tag kept as raw bytes.
+    /// `PPTH`: the path of the audio file.
+    Path(AudioPath),
+    /// `PQTZ`: the beat grid.
+    BeatGrid(BeatGrid),
+    /// `PCOB`: a hot cue or memory point list.
+    Cues(CueList),
+    /// A tag this crate does not type, kept as raw bytes.
     Raw(RawTag),
 }
 
@@ -101,18 +118,31 @@ impl Tag {
     /// The tag's four-character code.
     pub fn fourcc(&self) -> FourCc {
         match self {
+            Self::Path(_) => FourCc::PPTH,
+            Self::BeatGrid(_) => FourCc::PQTZ,
+            Self::Cues(_) => FourCc::PCOB,
             Self::Raw(raw) => raw.fourcc(),
         }
     }
 
     /// Decodes one tag at the reader's position and advances past it.
     pub(crate) fn decode(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
-        read_frame(r).map(|frame| Self::Raw(RawTag::from(frame)))
+        let frame = read_frame(r)?;
+        // Keep in step with `FourCc::is_typed`, which lists exactly the codes typed here.
+        match frame.fourcc {
+            FourCc::PPTH => AudioPath::decode(frame).map(Self::Path),
+            FourCc::PQTZ => BeatGrid::decode(frame).map(Self::BeatGrid),
+            FourCc::PCOB => CueList::decode(frame).map(Self::Cues),
+            _ => Ok(Self::Raw(RawTag::from(frame))),
+        }
     }
 
-    /// Encodes the tag, computing `len_header` and `len_tag`.
+    /// Encodes the tag, computing `len_header`, `len_tag` and every derived length.
     pub(crate) fn encode(&self, w: &mut Writer) -> Result<(), EncodeError> {
         match self {
+            Self::Path(path) => path.encode(w),
+            Self::BeatGrid(grid) => grid.encode(w),
+            Self::Cues(cues) => cues.encode(w),
             Self::Raw(raw) => raw.encode(w),
         }
     }
@@ -123,12 +153,54 @@ impl Tag {
 /// Both readers report absolute offsets and borrow from the input.
 #[derive(Debug)]
 pub(crate) struct Frame<'a> {
+    /// Absolute offset of the tag's first byte.
+    pub(crate) start: u64,
     /// The tag's four-character code.
     pub(crate) fourcc: FourCc,
     /// Bytes `12..len_header` of the tag.
     pub(crate) header: Reader<'a>,
     /// Bytes `len_header..len_tag` of the tag.
     pub(crate) body: Reader<'a>,
+}
+
+impl Frame<'_> {
+    /// Fails with [`DecodeErrorKind::BadMagic`] at the start of the tag, named `context`,
+    /// unless the tag's code is `expected`.
+    pub(crate) fn expect_fourcc(
+        &self,
+        expected: FourCc,
+        context: &'static str,
+    ) -> Result<(), DecodeError> {
+        if self.fourcc == expected {
+            return Ok(());
+        }
+        Err(DecodeError::new(
+            self.start,
+            context,
+            DecodeErrorKind::BadMagic {
+                expected: expected.0,
+                found: self.fourcc.0,
+            },
+        ))
+    }
+
+    /// Fails with [`DecodeErrorKind::InvalidValue`] at the tag's `len_header` field, named
+    /// `context`, when `len_header` is below the documented `min`.
+    pub(crate) fn require_len_header(
+        &self,
+        min: u32,
+        context: &'static str,
+    ) -> Result<(), DecodeError> {
+        let min_tail = usize::try_from(min.saturating_sub(COMMON_HEADER_LEN)).unwrap_or(usize::MAX);
+        if self.header.remaining() >= min_tail {
+            return Ok(());
+        }
+        Err(DecodeError::new(
+            self.start.saturating_add(4),
+            context,
+            DecodeErrorKind::InvalidValue,
+        ))
+    }
 }
 
 /// Reads the common tag header at the reader's position, checks its lengths, and splits the
@@ -177,6 +249,7 @@ pub(crate) fn read_frame<'a>(r: &mut Reader<'a>) -> Result<Frame<'a>, DecodeErro
     let header = r.sub_reader(header_len).context("tag header bytes")?;
     let body = r.sub_reader(body_len).context("tag body")?;
     Ok(Frame {
+        start,
         fourcc,
         header,
         body,
@@ -204,7 +277,7 @@ pub(crate) fn write_frame(
 /// A tag as raw bytes: its code, its tag-specific header and its body.
 ///
 /// The common 12-byte header is not stored; `len_header` and `len_tag` are recomputed on
-/// encode.
+/// encode. A raw tag never has a typed code (see [`FourCc::is_typed`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RawTag {
@@ -214,16 +287,17 @@ pub struct RawTag {
 }
 
 impl RawTag {
-    /// Creates a raw tag.
+    /// Creates a raw tag, or returns `None` when `fourcc` is one this crate types
+    /// ([`FourCc::is_typed`]); build those through their typed [`Tag`] variant instead.
     ///
     /// `header` is the tag-specific header (bytes `12..len_header` of the tag) and `body`
     /// is everything after it (bytes `len_header..len_tag`).
-    pub fn new(fourcc: FourCc, header: Vec<u8>, body: Vec<u8>) -> Self {
-        Self {
+    pub fn new(fourcc: FourCc, header: Vec<u8>, body: Vec<u8>) -> Option<Self> {
+        (!fourcc.is_typed()).then_some(Self {
             fourcc,
             header,
             body,
-        }
+        })
     }
 
     /// The tag's four-character code.
@@ -257,13 +331,16 @@ impl RawTag {
     }
 }
 
+/// Keeps a frame verbatim. Only [`Tag::decode`] uses this, and only for untyped codes.
 impl From<Frame<'_>> for RawTag {
     fn from(frame: Frame<'_>) -> Self {
         let Frame {
             fourcc,
             mut header,
             mut body,
+            ..
         } = frame;
+        debug_assert!(!fourcc.is_typed(), "raw tag with a typed fourcc");
         Self {
             fourcc,
             header: header.take_rest().to_vec(),
@@ -319,11 +396,70 @@ mod tests {
 
     #[test]
     fn raw_tag_getters_and_tag_fourcc() {
-        let raw = RawTag::new(FourCc::PCOB, vec![1, 2], vec![3]);
-        assert_eq!(raw.fourcc(), FourCc::PCOB);
+        let raw = RawTag::new(FourCc::PCO2, vec![1, 2], vec![3]).unwrap();
+        assert_eq!(raw.fourcc(), FourCc::PCO2);
         assert_eq!(raw.header(), [1, 2]);
         assert_eq!(raw.body(), [3]);
-        assert_eq!(Tag::Raw(raw).fourcc(), FourCc::PCOB);
+        assert_eq!(Tag::Raw(raw).fourcc(), FourCc::PCO2);
+    }
+
+    #[test]
+    fn raw_tag_rejects_typed_fourccs() {
+        for typed in [FourCc::PPTH, FourCc::PQTZ, FourCc::PCOB] {
+            assert!(typed.is_typed());
+            assert_eq!(RawTag::new(typed, vec![], vec![]), None);
+        }
+        for untyped in [FourCc::PWAV, FourCc::PCO2, FourCc::new(*b"ZZZZ")] {
+            assert!(!untyped.is_typed());
+            assert!(RawTag::new(untyped, vec![], vec![]).is_some());
+        }
+    }
+
+    #[test]
+    fn typed_variants_report_their_fourcc() {
+        let typed = [
+            (Tag::Path(AudioPath::new("/a")), FourCc::PPTH),
+            (Tag::BeatGrid(BeatGrid::new(vec![])), FourCc::PQTZ),
+            (Tag::Cues(CueList::memory([])), FourCc::PCOB),
+        ];
+        for (tag, code) in typed {
+            assert_eq!(tag.fourcc(), code);
+            assert!(tag.fourcc().is_typed(), "{code} must be listed in is_typed");
+        }
+    }
+
+    #[test]
+    fn frame_checks_fourcc_and_minimum_len_header() {
+        let mut data = vec![0xee; 2];
+        data.extend_from_slice(b"PCPT");
+        data.extend_from_slice(&16u32.to_be_bytes());
+        data.extend_from_slice(&16u32.to_be_bytes());
+        data.extend_from_slice(&[0; 4]);
+        let mut r = Reader::new(&data);
+        r.skip(2).unwrap();
+        let frame = read_frame(&mut r).unwrap();
+        assert_eq!(frame.start, 2);
+        assert_eq!(frame.expect_fourcc(FourCc::new(*b"PCPT"), "x"), Ok(()));
+        let err = frame
+            .expect_fourcc(FourCc::PCOB, "PCPT fourcc")
+            .unwrap_err();
+        assert_eq!(
+            (err.offset, err.context, err.kind),
+            (
+                2,
+                "PCPT fourcc",
+                DecodeErrorKind::BadMagic {
+                    expected: *b"PCOB",
+                    found: *b"PCPT",
+                }
+            )
+        );
+        assert_eq!(frame.require_len_header(16, "x"), Ok(()));
+        let err = frame.require_len_header(17, "PCPT len_header").unwrap_err();
+        assert_eq!(
+            (err.offset, err.context, err.kind),
+            (6, "PCPT len_header", DecodeErrorKind::InvalidValue)
+        );
     }
 
     #[test]

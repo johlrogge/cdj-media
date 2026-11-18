@@ -51,19 +51,11 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads one byte.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u8(&mut self) -> Result<u8, DecodeError> {
         self.array_in::<1>("u8").map(|[b]| b)
     }
 
     /// Reads a big-endian `u16`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u16_be(&mut self) -> Result<u16, DecodeError> {
         self.array_in("u16_be").map(u16::from_be_bytes)
     }
@@ -273,19 +265,11 @@ impl Writer {
     }
 
     /// Writes one byte.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u8(&mut self, value: u8) {
         self.buf.push(value);
     }
 
     /// Writes a big-endian `u16`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u16_be(&mut self, value: u16) {
         self.bytes(&value.to_be_bytes());
     }
@@ -300,10 +284,6 @@ impl Writer {
     }
 
     /// Writes a big-endian `u32`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u32_be(&mut self, value: u32) {
         self.bytes(&value.to_be_bytes());
     }

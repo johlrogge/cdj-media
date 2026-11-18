@@ -11,9 +11,19 @@
 //!
 //! Tags follow from offset `len_header` and tile the rest of the file exactly. See
 //! [`Tag`] for the tag framing.
+//!
+//! `PPTH`, `PQTZ` and `PCOB` are decoded into [`AudioPath`], [`BeatGrid`] and [`CueList`]
+//! (see ADR-004); every other tag is kept as a [`RawTag`].
 
+mod beat_grid;
+mod cues;
+pub(crate) mod defaults;
+mod path;
 mod tag;
 
+pub use beat_grid::{Beat, BeatGrid};
+pub use cues::{Cue, CueList, CueListKind, CueSpan, HotCueSlot};
+pub use path::AudioPath;
 pub use tag::{FourCc, RawTag, Tag};
 
 use crate::bytes::{Reader, Writer};
@@ -59,6 +69,39 @@ impl AnlzFile {
     /// Some codes occur more than once in a file: `.DAT` files have two PCOB tags.
     pub fn tags_with(&self, fourcc: FourCc) -> impl Iterator<Item = &Tag> + '_ {
         self.tags.iter().filter(move |tag| tag.fourcc() == fourcc)
+    }
+
+    /// The path of the analysed audio file: the first `PPTH` tag. Real files have one.
+    pub fn path(&self) -> Option<&str> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::Path(path) => Some(path.path()),
+            _ => None,
+        })
+    }
+
+    /// The beat grid: the first `PQTZ` tag.
+    pub fn beat_grid(&self) -> Option<&BeatGrid> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::BeatGrid(grid) => Some(grid),
+            _ => None,
+        })
+    }
+
+    /// The hot cues: the first `PCOB` tag whose kind is [`CueListKind::Hot`].
+    pub fn hot_cues(&self) -> Option<&CueList> {
+        self.cue_list(CueListKind::Hot)
+    }
+
+    /// The memory points: the first `PCOB` tag whose kind is [`CueListKind::Memory`].
+    pub fn memory_cues(&self) -> Option<&CueList> {
+        self.cue_list(CueListKind::Memory)
+    }
+
+    fn cue_list(&self, kind: CueListKind) -> Option<&CueList> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::Cues(cues) if cues.kind() == kind => Some(cues),
+            _ => None,
+        })
     }
 
     /// Decodes a whole ANLZ file.
@@ -178,7 +221,43 @@ mod tests {
     }
 
     fn raw(fourcc: FourCc, header: &[u8], body: &[u8]) -> Tag {
-        Tag::Raw(RawTag::new(fourcc, header.to_vec(), body.to_vec()))
+        Tag::Raw(RawTag::new(fourcc, header.to_vec(), body.to_vec()).expect("untyped fourcc"))
+    }
+
+    /// A PCPT entry by hand: hot cue `slot`, a point at `ms`.
+    ///
+    /// Deliberately not rekordbox's values: `status` 1 and order `(0, 0xFFFF)` are rare or
+    /// never seen in real files, so the test proves they are kept. See `anlz::defaults` for
+    /// the real values; do not copy these.
+    fn pcpt_point(slot: u32, ms: u32) -> Vec<u8> {
+        let header = [
+            &slot.to_be_bytes()[..],
+            &1u32.to_be_bytes(),
+            &0x0001_0000u32.to_be_bytes(),
+            &0u16.to_be_bytes(),
+            &0xffffu16.to_be_bytes(),
+        ]
+        .concat();
+        let body = [
+            &[1, 0, 3, 0xe8][..],
+            &ms.to_be_bytes(),
+            &u32::MAX.to_be_bytes(),
+            &[0; 16],
+        ]
+        .concat();
+        tag_bytes(b"PCPT", &header, &body)
+    }
+
+    /// A PCOB header by hand, always with `memory_count` `0xFFFFFFFF`, which rekordbox only
+    /// writes for hot cue lists and empty memory point lists.
+    fn pcob_header(kind: u32, len_cues: u16) -> Vec<u8> {
+        [
+            &kind.to_be_bytes()[..],
+            &0u16.to_be_bytes(),
+            &len_cues.to_be_bytes(),
+            &u32::MAX.to_be_bytes(),
+        ]
+        .concat()
     }
 
     fn assert_round_trip(bytes: &[u8], expected: &AnlzFile) {
@@ -206,42 +285,116 @@ mod tests {
         assert_round_trip(&bytes, &AnlzFile::new(vec![], vec![]));
     }
 
-    #[test]
-    fn multi_tag_file_round_trips_in_order() {
-        let bytes = file_bytes(
+    /// A file shaped like a real `.DAT`: path, beat grid, hot cues, memory points, and a
+    /// tag this crate does not type.
+    fn dat_like_bytes() -> Vec<u8> {
+        let beat = [
+            &1u16.to_be_bytes()[..],
+            &12_000u16.to_be_bytes(),
+            &500u32.to_be_bytes(),
+        ]
+        .concat();
+        file_bytes(
             &UNKNOWN,
             &[
-                tag_bytes(b"PPTH", &[0, 0, 0, 4], b"a\0b\0"),
-                tag_bytes(b"PQTZ", &[0; 12], &[1, 2, 3, 4, 5, 6, 7, 8]),
-                tag_bytes(b"PCOB", &[0; 12], &[]),
-                tag_bytes(b"PCOB", &[1; 12], &[9]),
+                tag_bytes(b"PPTH", &6u32.to_be_bytes(), &[0, b'/', 0, b'a', 0, 0]),
+                tag_bytes(b"PQTZ", &[0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1], &beat),
+                tag_bytes(b"PCOB", &pcob_header(1, 1), &pcpt_point(2, 12_345)),
+                tag_bytes(b"PCOB", &pcob_header(0, 1), &pcpt_point(0, 700)),
                 tag_bytes(b"ZZZZ", &[], &[]),
             ],
-        );
-        let expected = AnlzFile::new(
+        )
+    }
+
+    fn dat_like() -> AnlzFile {
+        let point = |ms| CueSpan::Point(crate::encoding::Millis::new(ms));
+        // Matches `pcpt_point`, whose status and order are deliberately not rekordbox's.
+        let cue = |cue: Cue| {
+            cue.with_status(1)
+                .with_unknown1(0x0001_0000)
+                .with_order(0, 0xffff)
+        };
+        AnlzFile::new(
             UNKNOWN.to_vec(),
             vec![
-                raw(FourCc::PPTH, &[0, 0, 0, 4], b"a\0b\0"),
-                raw(FourCc::PQTZ, &[0; 12], &[1, 2, 3, 4, 5, 6, 7, 8]),
-                raw(FourCc::PCOB, &[0; 12], &[]),
-                raw(FourCc::PCOB, &[1; 12], &[9]),
+                Tag::Path(AudioPath::new("/a")),
+                Tag::BeatGrid(BeatGrid::new(vec![Beat::new(
+                    crate::encoding::BeatInBar::One,
+                    crate::encoding::Bpm::from_centi(12_000),
+                    crate::encoding::Millis::new(500),
+                )])),
+                Tag::Cues(CueList::new(
+                    CueListKind::Hot,
+                    vec![cue(Cue::hot(HotCueSlot::B, point(12_345)))],
+                )),
+                Tag::Cues(CueList::new(
+                    CueListKind::Memory,
+                    vec![cue(Cue::memory(point(700)))],
+                )),
                 raw(FourCc::new(*b"ZZZZ"), &[], &[]),
             ],
-        );
-        assert_round_trip(&bytes, &expected);
+        )
+    }
+
+    #[test]
+    fn multi_tag_file_round_trips_in_order() {
+        let bytes = dat_like_bytes();
+        assert_round_trip(&bytes, &dat_like());
 
         let decoded = AnlzFile::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.unknown_header(), UNKNOWN);
         assert_eq!(decoded.tags().len(), 5);
-        let cob_headers: Vec<&[u8]> = decoded
-            .tags_with(FourCc::PCOB)
-            .map(|tag| match tag {
-                Tag::Raw(raw) => raw.header(),
-            })
-            .collect();
-        assert_eq!(cob_headers, [[0; 12], [1; 12]]);
+        assert_eq!(decoded.tags_with(FourCc::PCOB).count(), 2);
         assert_eq!(decoded.tags_with(FourCc::PWV3).count(), 0);
         assert_eq!(decoded.tags_with(FourCc::PPTH).count(), 1);
+    }
+
+    #[test]
+    fn accessors_find_typed_tags() {
+        let file = dat_like();
+        assert_eq!(file.path(), Some("/a"));
+        assert_eq!(file.beat_grid().map(|g| g.beats().len()), Some(1));
+        let hot = file.hot_cues().unwrap();
+        assert_eq!(hot.cues()[0].hot_cue(), Some(HotCueSlot::B));
+        let memory = file.memory_cues().unwrap();
+        assert_eq!(memory.cues()[0].hot_cue(), None);
+
+        let empty = AnlzFile::new(vec![], vec![]);
+        assert_eq!(empty.path(), None);
+        assert!(empty.beat_grid().is_none());
+        assert!(empty.hot_cues().is_none() && empty.memory_cues().is_none());
+    }
+
+    #[test]
+    fn cue_lists_are_chosen_by_kind_not_position() {
+        let file = AnlzFile::new(
+            vec![],
+            vec![
+                Tag::Cues(CueList::memory([])),
+                Tag::Cues(CueList::new(CueListKind::Other(7), vec![])),
+                Tag::Cues(CueList::hot([])),
+            ],
+        );
+        assert_eq!(file.hot_cues().unwrap().kind(), CueListKind::Hot);
+        assert_eq!(file.memory_cues().unwrap().kind(), CueListKind::Memory);
+    }
+
+    #[test]
+    fn typed_tag_that_fails_to_parse_is_an_error_not_raw() {
+        // A PQTZ whose single beat has beat_number 0.
+        let beat = [0u8, 0, 0x2e, 0xe0, 0, 0, 1, 0xf4];
+        let bytes = file_bytes(
+            &UNKNOWN,
+            &[tag_bytes(
+                b"PQTZ",
+                &[0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1],
+                &beat,
+            )],
+        );
+        assert_eq!(
+            decode_err(&bytes),
+            (28 + 0x18, "PQTZ beat_number", DecodeErrorKind::InvalidValue)
+        );
     }
 
     #[test]
@@ -354,7 +507,7 @@ mod tests {
 
     /// A valid first tag, so the failing tag starts at a non-trivial offset: 28 + 15 = 43.
     fn first_tag() -> Vec<u8> {
-        tag_bytes(b"PPTH", &[0; 2], &[1])
+        tag_bytes(b"PVBR", &[0; 2], &[1])
     }
 
     const SECOND_TAG_AT: u64 = 43;
@@ -437,18 +590,151 @@ mod tests {
         );
     }
 
-    fn fourcc() -> impl Strategy<Value = FourCc> {
+    /// Codes this crate keeps raw; typed codes are generated by the typed strategies.
+    fn untyped_fourcc() -> impl Strategy<Value = FourCc> {
         prop_oneof![
-            Just(FourCc::PPTH),
-            Just(FourCc::PQTZ),
-            Just(FourCc::PCOB),
-            any::<[u8; 4]>().prop_map(FourCc::new),
+            Just(FourCc::PWAV),
+            Just(FourCc::PCO2),
+            Just(FourCc::new(*b"PCPT")),
+            any::<[u8; 4]>()
+                .prop_map(FourCc::new)
+                .prop_filter("untyped", |code| !code.is_typed()),
         ]
     }
 
+    fn raw_tag() -> impl Strategy<Value = Tag> {
+        (
+            untyped_fourcc(),
+            vec(any::<u8>(), 0..24),
+            vec(any::<u8>(), 0..64),
+        )
+            .prop_map(|(fourcc, header, body)| Tag::Raw(RawTag::new(fourcc, header, body).unwrap()))
+    }
+
+    fn tail() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![Just(vec![]), vec(any::<u8>(), 0..24)]
+    }
+
+    /// Raw enum values biased towards the named ones (0 to 3), so `Memory`, `Hot`, no slot
+    /// and slots A to C are all exercised, not only `Other`.
+    fn enum_value() -> impl Strategy<Value = u32> {
+        prop_oneof![
+            3 => Just(0u32),
+            3 => Just(1),
+            2 => Just(2),
+            2 => Just(3),
+            1 => any::<u32>(),
+        ]
+    }
+
+    fn path_tag() -> impl Strategy<Value = Tag> {
+        (any::<String>(), tail())
+            .prop_map(|(path, tail)| Tag::Path(AudioPath::new(path).with_header_tail(tail)))
+    }
+
+    fn beat() -> impl Strategy<Value = Beat> {
+        (1u16..=4, any::<u16>(), any::<u32>()).prop_map(|(n, tempo, ms)| {
+            Beat::new(
+                crate::encoding::BeatInBar::new(n).unwrap(),
+                crate::encoding::Bpm::from_centi(u32::from(tempo)),
+                crate::encoding::Millis::new(ms),
+            )
+        })
+    }
+
+    fn beat_grid_tag() -> impl Strategy<Value = Tag> {
+        (
+            any::<u32>(),
+            any::<u32>(),
+            tail(),
+            vec(beat(), 0..8),
+            tail(),
+        )
+            .prop_map(|(u1, u2, header_tail, beats, body_tail)| {
+                Tag::BeatGrid(
+                    BeatGrid::new(beats)
+                        .with_unknown1(u1)
+                        .with_unknown2(u2)
+                        .with_header_tail(header_tail)
+                        .with_body_tail(body_tail),
+                )
+            })
+    }
+
+    fn span() -> impl Strategy<Value = CueSpan> {
+        use crate::encoding::Millis;
+        prop_oneof![
+            any::<u32>().prop_map(|ms| CueSpan::Point(Millis::new(ms))),
+            (any::<u32>(), any::<u32>()).prop_map(|(s, e)| CueSpan::Loop {
+                start: Millis::new(s),
+                end: Millis::new(e),
+            }),
+            (any::<u8>(), any::<u32>(), any::<u32>()).prop_map(|(cue_type, time, loop_time)| {
+                CueSpan::Other {
+                    cue_type,
+                    time,
+                    loop_time,
+                }
+            }),
+        ]
+    }
+
+    fn cue() -> impl Strategy<Value = Cue> {
+        (
+            (
+                prop_oneof![
+                    4 => enum_value().prop_map(HotCueSlot::from_u32),
+                    // Hand-built `Other` slots, including the non-canonical `Other(0..=3)`.
+                    1 => enum_value().prop_map(|v| Some(HotCueSlot::Other(v))),
+                ],
+                span(),
+            ),
+            (any::<u32>(), any::<u32>(), any::<u16>(), any::<u16>()),
+            (any::<[u8; 3]>(), any::<[u8; 16]>(), tail(), tail()),
+        )
+            .prop_map(
+                |((slot, span), (status, u1, first, last), (u2, u3, ht, bt))| {
+                    let cue = match slot {
+                        Some(slot) => Cue::hot(slot, span),
+                        None => Cue::memory(span),
+                    };
+                    cue.with_status(status)
+                        .with_unknown1(u1)
+                        .with_order(first, last)
+                        .with_unknown2(u2)
+                        .with_unknown3(u3)
+                        .with_header_tail(ht)
+                        .with_body_tail(bt)
+                },
+            )
+    }
+
+    fn cue_list_tag() -> impl Strategy<Value = Tag> {
+        (
+            prop_oneof![
+                4 => enum_value().prop_map(CueListKind::from_u32),
+                // Hand-built `Other` values, including the non-canonical `Other(0 | 1)`.
+                1 => enum_value().prop_map(CueListKind::Other),
+            ],
+            any::<u16>(),
+            any::<u32>(),
+            tail(),
+            vec(cue(), 0..4),
+            tail(),
+        )
+            .prop_map(|(kind, u1, memory_count, ht, cues, bt)| {
+                Tag::Cues(
+                    CueList::new(kind, cues)
+                        .with_unknown1(u1)
+                        .with_memory_count(memory_count)
+                        .with_header_tail(ht)
+                        .with_body_tail(bt),
+                )
+            })
+    }
+
     fn tag() -> impl Strategy<Value = Tag> {
-        (fourcc(), vec(any::<u8>(), 0..24), vec(any::<u8>(), 0..64))
-            .prop_map(|(fourcc, header, body)| Tag::Raw(RawTag::new(fourcc, header, body)))
+        prop_oneof![raw_tag(), path_tag(), beat_grid_tag(), cue_list_tag()]
     }
 
     fn anlz_file() -> impl Strategy<Value = AnlzFile> {
