@@ -17,3 +17,8 @@
 //! <https://djl-analysis.deepsymmetry.org/rekordbox-export-analysis/>.
 //! rekordcrate (MIT) may be used as a dev-dependency to cross-check output.
 //! Code from GPL projects such as rbox is not copied.
+
+mod bytes;
+mod error;
+
+pub use error::{DecodeError, DecodeErrorKind, EncodeError, Error};

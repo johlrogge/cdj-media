@@ -1,6 +1,6 @@
 # ADR-003: Synthetic committed fixtures, local real-stick fixtures, hardware gates
 ## Status
-Proposed
+Accepted
 ## Decision
 - **Committed fixtures** are synthetic: made-up metadata cases (artists, titles, cues,
   beatgrids, including non-ASCII), built from what we learn reading real exports. Only

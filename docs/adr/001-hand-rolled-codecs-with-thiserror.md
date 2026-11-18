@@ -1,6 +1,6 @@
 # ADR-001: Hand-rolled binary codecs with thiserror errors (no binrw/deku/nom)
 ## Status
-Proposed
+Accepted
 ## Decision
 All formats (ANLZ and DeviceSQL `export.pdb`) are encoded and decoded by hand-rolled codecs
 built on a crate-private `bytes` layer: `Reader` (typed big- and little-endian reads that
