@@ -7,18 +7,10 @@
 //! - [`Patch`] reserves a fixed-width slot in a [`Writer`] to be filled in later, once a
 //!   length or offset is known.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the codecs that use these primitives land in later slices"
-    )
-)]
-
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::error::{DecodeError, DecodeErrorKind};
+use crate::error::{DecodeError, DecodeErrorKind, EncodeError};
 
 /// Reads typed values from a byte slice, tracking an absolute offset.
 ///
@@ -59,16 +51,28 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads one byte.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u8(&mut self) -> Result<u8, DecodeError> {
         self.array_in::<1>("u8").map(|[b]| b)
     }
 
     /// Reads a big-endian `u16`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u16_be(&mut self) -> Result<u16, DecodeError> {
         self.array_in("u16_be").map(u16::from_be_bytes)
     }
 
     /// Reads a little-endian `u16`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u16_le(&mut self) -> Result<u16, DecodeError> {
         self.array_in("u16_le").map(u16::from_le_bytes)
     }
@@ -79,16 +83,28 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a little-endian `u32`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u32_le(&mut self) -> Result<u32, DecodeError> {
         self.array_in("u32_le").map(u32::from_le_bytes)
     }
 
     /// Reads a big-endian `u64`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u64_be(&mut self) -> Result<u64, DecodeError> {
         self.array_in("u64_be").map(u64::from_be_bytes)
     }
 
     /// Reads a little-endian `u64`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u64_le(&mut self) -> Result<u64, DecodeError> {
         self.array_in("u64_le").map(u64::from_le_bytes)
     }
@@ -98,12 +114,23 @@ impl<'a> Reader<'a> {
         self.take(n, "bytes")
     }
 
+    /// Reads everything left, borrowed from the input. Never fails.
+    pub(crate) fn take_rest(&mut self) -> &'a [u8] {
+        let rest = self.rest();
+        self.advance(rest.len());
+        rest
+    }
+
     /// Reads exactly `N` bytes into an array.
     pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
         self.array_in("array")
     }
 
     /// Skips `n` bytes.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn skip(&mut self, n: usize) -> Result<(), DecodeError> {
         self.take(n, "skip").map(|_| ())
     }
@@ -112,6 +139,10 @@ impl<'a> Reader<'a> {
     ///
     /// `abs` may be anywhere from the start of this reader's slice up to and including its
     /// end. Anything else fails with [`DecodeErrorKind::InvalidValue`] at offset `abs`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn seek(&mut self, abs: u64) -> Result<(), DecodeError> {
         let target = abs
             .checked_sub(self.base)
@@ -242,36 +273,64 @@ impl Writer {
     }
 
     /// Writes one byte.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u8(&mut self, value: u8) {
         self.buf.push(value);
     }
 
     /// Writes a big-endian `u16`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u16_be(&mut self, value: u16) {
         self.bytes(&value.to_be_bytes());
     }
 
     /// Writes a little-endian `u16`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u16_le(&mut self, value: u16) {
         self.bytes(&value.to_le_bytes());
     }
 
     /// Writes a big-endian `u32`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u32_be(&mut self, value: u32) {
         self.bytes(&value.to_be_bytes());
     }
 
     /// Writes a little-endian `u32`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u32_le(&mut self, value: u32) {
         self.bytes(&value.to_le_bytes());
     }
 
     /// Writes a big-endian `u64`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u64_be(&mut self, value: u64) {
         self.bytes(&value.to_be_bytes());
     }
 
     /// Writes a little-endian `u64`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn u64_le(&mut self, value: u64) {
         self.bytes(&value.to_le_bytes());
     }
@@ -287,11 +346,19 @@ impl Writer {
     }
 
     /// Reserves a big-endian `u16` slot, written as zeros until patched.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn reserve_u16_be(&mut self) -> Patch<u16> {
         self.reserve(Endian::Big)
     }
 
     /// Reserves a little-endian `u16` slot, written as zeros until patched.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn reserve_u16_le(&mut self) -> Patch<u16> {
         self.reserve(Endian::Little)
     }
@@ -302,6 +369,10 @@ impl Writer {
     }
 
     /// Reserves a little-endian `u32` slot, written as zeros until patched.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn reserve_u32_le(&mut self) -> Patch<u32> {
         self.reserve(Endian::Little)
     }
@@ -330,6 +401,33 @@ impl Writer {
         slot.copy_from_slice(encoded);
     }
 
+    /// Fills a reserved length slot with the number of bytes written since offset `start`.
+    ///
+    /// Fails with [`EncodeError::LengthOverflow`] naming `context` when that length does not
+    /// fit the slot's type, or when `start` is past the current position. The slot is left
+    /// zero on failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `token` was reserved by a different writer, like [`Writer::patch`].
+    pub(crate) fn patch_len_since<T>(
+        &mut self,
+        token: Patch<T>,
+        start: usize,
+        context: &'static str,
+    ) -> Result<(), EncodeError>
+    where
+        T: PatchValue + TryFrom<usize>,
+    {
+        let len = self
+            .position()
+            .checked_sub(start)
+            .and_then(|len| T::try_from(len).ok())
+            .ok_or(EncodeError::LengthOverflow { context })?;
+        self.patch(token, len);
+        Ok(())
+    }
+
     /// Returns the written bytes.
     pub(crate) fn into_inner(self) -> Vec<u8> {
         self.buf
@@ -351,6 +449,10 @@ impl Writer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Endian {
     Big,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     Little,
 }
 
@@ -401,6 +503,10 @@ pub(crate) struct Patch<T: PatchValue> {
 
 impl<T: PatchValue> Patch<T> {
     /// Offset of the reserved slot in its writer.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the pdb codec in a later slice")
+    )]
     pub(crate) fn offset(&self) -> usize {
         self.offset
     }
@@ -473,6 +579,16 @@ mod tests {
         assert_eq!(r.bytes(0), Ok(&[][..]));
         assert_eq!(r.u8(), Ok(8));
         assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn take_rest_reads_everything_left() {
+        let data = [1, 2, 3, 4];
+        let mut r = Reader::with_base(&data, 0x10);
+        r.skip(1).unwrap();
+        assert_eq!(r.take_rest(), [2, 3, 4]);
+        assert_eq!(r.position(), 0x14);
+        assert_eq!(r.take_rest(), [0u8; 0]);
     }
 
     #[test]
@@ -634,6 +750,50 @@ mod tests {
         b.zeros(8);
         let slot = a.reserve_u32_be();
         b.patch(slot, 1);
+    }
+
+    #[test]
+    fn patch_len_since_writes_bytes_written_since_start() {
+        let mut w = Writer::new();
+        w.zeros(3);
+        let start = w.position();
+        w.bytes(b"TAG!");
+        let len = w.reserve_u32_be();
+        w.zeros(5);
+        assert_eq!(w.patch_len_since(len, start, "tag len"), Ok(()));
+        assert_eq!(
+            w.into_inner(),
+            [0, 0, 0, b'T', b'A', b'G', b'!', 0, 0, 0, 13, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn patch_len_since_reports_overflow_and_leaves_slot_zero() {
+        let mut w = Writer::new();
+        let len = w.reserve_u16_be();
+        w.zeros(usize::from(u16::MAX) - 1);
+        let err = w.patch_len_since(len, 0, "big tag").unwrap_err();
+        assert_eq!(err, EncodeError::LengthOverflow { context: "big tag" });
+        let buf = w.into_inner();
+        assert_eq!(buf.len(), usize::from(u16::MAX) + 1);
+        assert_eq!(buf[..2], [0, 0]);
+    }
+
+    #[test]
+    fn patch_len_since_fits_the_largest_value() {
+        let mut w = Writer::new();
+        let len = w.reserve_u16_le();
+        w.zeros(usize::from(u16::MAX) - 2);
+        assert_eq!(w.patch_len_since(len, 0, "big tag"), Ok(()));
+        assert_eq!(w.into_inner()[..2], [0xff, 0xff]);
+    }
+
+    #[test]
+    fn patch_len_since_rejects_start_past_position() {
+        let mut w = Writer::new();
+        let len = w.reserve_u32_be();
+        let err = w.patch_len_since(len, 10, "tag len").unwrap_err();
+        assert_eq!(err, EncodeError::LengthOverflow { context: "tag len" });
     }
 
     #[derive(Debug, Clone)]

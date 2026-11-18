@@ -18,6 +18,7 @@
 //! rekordcrate (MIT) may be used as a dev-dependency to cross-check output.
 //! Code from GPL projects such as rbox is not copied.
 
+pub mod anlz;
 mod bytes;
 mod error;
 

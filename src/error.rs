@@ -49,10 +49,6 @@ impl DecodeError {
 ///
 /// Primitive reads report their own method name (`"u32_be"`) as context. Codecs replace
 /// it with the field they were reading. The offset and kind are kept.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the codecs that add context land in later slices")
-)]
 pub(crate) trait DecodeContext<T> {
     /// Replaces the context of an error; leaves `Ok` untouched.
     fn context(self, context: &'static str) -> Result<T, DecodeError>;
