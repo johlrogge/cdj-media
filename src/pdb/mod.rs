@@ -27,10 +27,14 @@
 //! [`Album`], [`Label`], [`Key`], [`Color`], [`Artwork`]), and encode back to exactly the
 //! row's bytes. A typed row ends after its last string; the padding after it stays in the
 //! page heap.
+//!
+//! [`Database`] (in [`model`]) is the domain model over those rows: text as `String`,
+//! rows keyed by id, references resolved.
 
 pub(crate) mod defaults;
 mod file;
 mod ids;
+pub mod model;
 mod page;
 mod rows;
 mod table;
@@ -39,6 +43,7 @@ mod testutil;
 
 pub use file::Pdb;
 pub use ids::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, TrackId};
+pub use model::Database;
 pub use page::{DataBody, IndexBody, Page, PageBody, RawRow, RowGroup};
 pub use rows::{
     Album, Artist, Artwork, Color, ExportRow, FileType, Genre, Key, Label, OtherFileType, Track,

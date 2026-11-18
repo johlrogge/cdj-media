@@ -485,6 +485,28 @@ fn real_stick_tracks_rebuild_from_their_values() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// The filename (slot 19) equals the last component of the file path (slot 20) on every
+/// track row. ADR-008: `ExportBuilder` derives the filename from the path, which relies on
+/// this holding for rekordbox's rows.
+#[test]
+fn real_stick_filename_is_the_last_path_component() {
+    let Some(pdb) = load() else {
+        return;
+    };
+    let tracks = tracks(&pdb);
+    let matching = tracks
+        .iter()
+        .filter(|(_, _, t)| {
+            t.file_path().as_str().rsplit('/').next() == Some(t.filename().as_str())
+        })
+        .count();
+    eprintln!(
+        "filename equals the last file path component on {matching} of {} tracks",
+        tracks.len()
+    );
+    assert_eq!(matching, TRACK_ROWS);
+}
+
 /// `unknown2` is different in every track row, so no constant can stand in for it
 /// (ADR-008).
 #[test]

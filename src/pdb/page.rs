@@ -458,6 +458,11 @@ impl<'a> RawRow<'a> {
         Reader::with_base(self.bytes, self.at)
     }
 
+    /// Absolute file offset of the row's first byte.
+    pub(crate) fn file_offset(&self) -> u64 {
+        self.at
+    }
+
     /// The row's offset from the heap start, as stored in the row index.
     pub fn offset(&self) -> u16 {
         self.offset
