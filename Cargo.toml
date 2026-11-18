@@ -1,0 +1,9 @@
+[package]
+name = "cdj-media"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/johlrogge/cdj-media"
+description = "Read and write Pioneer CDJ/rekordbox USB exports (export.pdb, ANLZ) without rekordbox"
+
+[dependencies]

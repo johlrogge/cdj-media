@@ -1,0 +1,27 @@
+allowUnfree: true
+
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/nixos-25.11
+  rust-overlay:
+    url: github:oxalica/rust-overlay
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  git-hooks:
+    url: github:cachix/git-hooks.nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  # Required by metadev (its devenv.nix reads inputs.claude-code-nix)
+  claude-code-nix:
+    url: github:sadjow/claude-code-nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  metadev:
+    url: github:johlrogge/metadev
+    flake: false
+
+imports:
+  - metadev
