@@ -98,6 +98,14 @@ pub enum DecodeErrorKind {
     /// A value is not valid at this position.
     #[error("invalid value")]
     InvalidValue,
+    /// A table's page chain leads back to a page it has already visited before reaching
+    /// the table's last page.
+    #[error("page chain cycles back to page {page}")]
+    #[non_exhaustive]
+    PageChainCycle {
+        /// The page visited a second time.
+        page: u32,
+    },
 }
 
 /// Failure to encode a value into bytes.

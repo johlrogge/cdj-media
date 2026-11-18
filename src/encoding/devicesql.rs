@@ -19,6 +19,10 @@
 //! [`DeviceSqlString`] remembers which form it was read in, so re-encoding a decoded string
 //! gives back identical bytes. [`DeviceSqlString::new`] picks the form rekordbox picks.
 //!
+//! Strings are read from the rows of an `export.pdb` with
+//! [`RawRow::string_at`](crate::pdb::RawRow::string_at) and
+//! [`RawRow::isrc_at`](crate::pdb::RawRow::isrc_at); the byte-level codec is crate-private.
+//!
 //! # Pad byte
 //!
 //! The pad byte of the long form is stored verbatim; it is 0 in every string rekordbox
@@ -150,34 +154,12 @@ impl DeviceSqlString {
         &self.text
     }
 
-    /// Decodes the string field at the start of `data`. Bytes after the field are ignored.
-    ///
-    /// Flag `0x90` is always read as UTF-16LE; use
-    /// [`isrc_slot_from_bytes`](Self::isrc_slot_from_bytes) for a track's ISRC slot.
-    ///
-    /// Test entry point; will become crate-private when the pdb codec lands (slice 4).
-    #[doc(hidden)]
-    pub fn from_bytes(data: &[u8]) -> Result<Self, DecodeError> {
-        decode(&mut Reader::new(data))
-    }
-
-    /// Decodes the string field at the start of `data`, which is a track's ISRC slot. Bytes
-    /// after the field are ignored.
-    ///
-    /// Like [`from_bytes`](Self::from_bytes), except that flag `0x90` content of the shape
-    /// `0x03`, ASCII without NULs, NUL is read as [`StringForm::Isrc`].
-    ///
-    /// Test entry point; will become crate-private when the pdb codec lands (slice 4).
-    #[doc(hidden)]
-    pub fn isrc_slot_from_bytes(data: &[u8]) -> Result<Self, DecodeError> {
-        decode_isrc(&mut Reader::new(data))
-    }
-
     /// Encodes the string field.
-    ///
-    /// Test entry point; will become crate-private when the pdb codec lands (slice 4).
-    #[doc(hidden)]
-    pub fn to_bytes(&self) -> Result<Vec<u8>, EncodeError> {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "typed rows encode strings in a later slice")
+    )]
+    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>, EncodeError> {
         let mut w = Writer::new();
         self.encode(&mut w)?;
         Ok(w.into_inner())
