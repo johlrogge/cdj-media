@@ -20,6 +20,7 @@
 
 pub mod anlz;
 mod bytes;
+pub mod encoding;
 mod error;
 
 pub use error::{DecodeError, DecodeErrorKind, EncodeError, Error};
