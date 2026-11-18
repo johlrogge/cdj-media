@@ -61,10 +61,6 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a little-endian `u16`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u16_le(&mut self) -> Result<u16, DecodeError> {
         self.array_in("u16_le").map(u16::from_le_bytes)
     }
@@ -275,10 +271,6 @@ impl Writer {
     }
 
     /// Writes a little-endian `u16`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the pdb codec in a later slice")
-    )]
     pub(crate) fn u16_le(&mut self, value: u16) {
         self.bytes(&value.to_le_bytes());
     }

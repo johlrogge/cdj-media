@@ -42,4 +42,5 @@ devenv.local.yaml
 *.wv
 
 # Local-only fixtures (real library metadata, never committed)
-/local-fixtures/
+# No trailing slash: also matches the symlink each worktree uses to share it.
+/local-fixtures
