@@ -73,4 +73,28 @@ rekordbox-exported, CDJ-played stick.
     is inside `used_size`. Padding bytes are zero, except on 4 pages (77, 78, 80, 81)
     where rows were rewritten in place: there the space after a row holds leftover text
     of a longer, earlier version, and the next row may start further on.
+- **Track rows** (827 on the stick):
+  - No track id is 0. `index_shift` is 0x20 × the row's slot in the page's row index,
+    counting absent rows, on every row (the same rule as artist and album rows).
+  - `subtype` 0x24, `unknown3` 0x3520, `unknown4` 0x1f58, `unknown5` 0x29 and `unknown7`
+    3 on every row. `bitmask` is 0xc0700 on 816 rows and 0xd0700 on 11 (they differ in
+    bit 0x10000).
+  - `unknown2` (u32 at 0x14) is different on every row and fits in 28 bits (0x3cd9 to
+    0xffb3bb9, mostly 24–28 bits). It doesn't grow with the track id, and it never matches
+    the track id or the hex numbers of the analysis path, so it looks like an opaque
+    random id.
+  - `file_type`: 765 AIFF (0x0c), 37 WAV (0x0b), 25 MP3 (1). Composer, original artist,
+    remixer and colour references are 0 on every row.
+  - String slots: 2 holds 1–2 digits and is never empty; 3 holds one digit; 4 is usually
+    empty, otherwise 1–2 digits; 8, 9, 13 and 18 are always empty; 6 and 7 are "ON" on
+    every row; 10 and 15 are `YYYY-MM-DD`; the filename (19) always equals the last
+    component of the file path (20). The ISRC slot holds the ISRC form on 10 rows and an
+    empty short string on the rest.
+  - Slot 14 (analysis path) is `/PIONEER/USBANLZ/Phhh/hhhhhhhh/ANLZ0000.DAT` (upper-case
+    hex) on 825 rows; 2 rows end in `ANLZ0001.DAT`. Each of those shares its directory
+    with exactly one other track whose path names `ANLZ0000.DAT`, consistent with a
+    hashed directory name plus numbered collisions. In one of the two directories
+    `ANLZ0000.DAT`/`.EXT` don't exist on the stick, so a track row can point at analysis
+    files that are missing.
+  - Non-zero gap bytes occur only before slots 17, 19 and 20 (30 rows).
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).
