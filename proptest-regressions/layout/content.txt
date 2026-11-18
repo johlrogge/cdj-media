@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3e0d54af3a47742c5db4a12e82f6de4695872b544fa11c789ca3c4686921b3b3 # shrinks to artist = "", album = "", file_name = "🎵🎵🎵aaa🎵🎵aa🎵🎵🎵🎵aaaa🎵a🎵🎵🎵🎵aaaaa🎵a🎵aa🎵a🎵aaa. "
