@@ -12,3 +12,8 @@ thiserror = "2"
 
 [dev-dependencies]
 proptest = "1"
+
+# Run the example's unit tests with `cargo test`.
+[[example]]
+name = "rewrite_pdb"
+test = true
