@@ -13,7 +13,7 @@
 
 use std::fmt;
 
-use super::{AudioPath, BeatGrid, CueList};
+use super::{AudioPath, BeatGrid, CueList, TinyWaveformPreview, WaveformDetail, WaveformPreview};
 use crate::bytes::{Reader, Writer};
 use crate::error::{DecodeContext, DecodeError, DecodeErrorKind, EncodeError};
 
@@ -69,11 +69,14 @@ impl FourCc {
     }
 
     /// Whether this crate decodes tags with this code into a typed [`Tag`] variant rather
-    /// than [`Tag::Raw`]: `PPTH`, `PQTZ` and `PCOB`.
+    /// than [`Tag::Raw`]: `PPTH`, `PQTZ`, `PCOB`, `PWAV`, `PWV2` and `PWV3`.
     pub const fn is_typed(self) -> bool {
         // Keep in step with the match in `Tag::decode`: every code it types is listed here,
         // or `RawTag::new` would accept a code that decodes as a typed variant.
-        matches!(&self.0, b"PPTH" | b"PQTZ" | b"PCOB")
+        matches!(
+            &self.0,
+            b"PPTH" | b"PQTZ" | b"PCOB" | b"PWAV" | b"PWV2" | b"PWV3"
+        )
     }
 }
 
@@ -98,9 +101,9 @@ impl fmt::Debug for FourCc {
 
 /// One tag of an ANLZ file.
 ///
-/// `PPTH`, `PQTZ` and `PCOB` are decoded into typed variants (see ADR-004); a tag with one
-/// of those codes that does not parse is a decode error, never a [`Tag::Raw`]. Every other
-/// tag is kept verbatim as [`Tag::Raw`].
+/// The codes listed by [`FourCc::is_typed`] are decoded into typed variants (see ADR-004);
+/// a tag with one of those codes that does not parse is a decode error, never a
+/// [`Tag::Raw`]. Every other tag is kept verbatim as [`Tag::Raw`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Tag {
@@ -110,6 +113,12 @@ pub enum Tag {
     BeatGrid(BeatGrid),
     /// `PCOB`: a hot cue or memory point list.
     Cues(CueList),
+    /// `PWAV`: the waveform preview.
+    WaveformPreview(WaveformPreview),
+    /// `PWV2`: the tiny waveform preview.
+    TinyWaveformPreview(TinyWaveformPreview),
+    /// `PWV3`: the waveform detail.
+    WaveformDetail(WaveformDetail),
     /// A tag this crate does not type, kept as raw bytes.
     Raw(RawTag),
 }
@@ -121,6 +130,9 @@ impl Tag {
             Self::Path(_) => FourCc::PPTH,
             Self::BeatGrid(_) => FourCc::PQTZ,
             Self::Cues(_) => FourCc::PCOB,
+            Self::WaveformPreview(_) => FourCc::PWAV,
+            Self::TinyWaveformPreview(_) => FourCc::PWV2,
+            Self::WaveformDetail(_) => FourCc::PWV3,
             Self::Raw(raw) => raw.fourcc(),
         }
     }
@@ -133,6 +145,9 @@ impl Tag {
             FourCc::PPTH => AudioPath::decode(frame).map(Self::Path),
             FourCc::PQTZ => BeatGrid::decode(frame).map(Self::BeatGrid),
             FourCc::PCOB => CueList::decode(frame).map(Self::Cues),
+            FourCc::PWAV => WaveformPreview::decode(frame).map(Self::WaveformPreview),
+            FourCc::PWV2 => TinyWaveformPreview::decode(frame).map(Self::TinyWaveformPreview),
+            FourCc::PWV3 => WaveformDetail::decode(frame).map(Self::WaveformDetail),
             _ => Ok(Self::Raw(RawTag::from(frame))),
         }
     }
@@ -143,6 +158,9 @@ impl Tag {
             Self::Path(path) => path.encode(w),
             Self::BeatGrid(grid) => grid.encode(w),
             Self::Cues(cues) => cues.encode(w),
+            Self::WaveformPreview(preview) => preview.encode(w),
+            Self::TinyWaveformPreview(preview) => preview.encode(w),
+            Self::WaveformDetail(detail) => detail.encode(w),
             Self::Raw(raw) => raw.encode(w),
         }
     }
@@ -405,11 +423,25 @@ mod tests {
 
     #[test]
     fn raw_tag_rejects_typed_fourccs() {
-        for typed in [FourCc::PPTH, FourCc::PQTZ, FourCc::PCOB] {
+        let typed = [
+            FourCc::PPTH,
+            FourCc::PQTZ,
+            FourCc::PCOB,
+            FourCc::PWAV,
+            FourCc::PWV2,
+            FourCc::PWV3,
+        ];
+        for typed in typed {
             assert!(typed.is_typed());
             assert_eq!(RawTag::new(typed, vec![], vec![]), None);
         }
-        for untyped in [FourCc::PWAV, FourCc::PCO2, FourCc::new(*b"ZZZZ")] {
+        let untyped = [
+            FourCc::PVBR,
+            FourCc::PWV4,
+            FourCc::PCO2,
+            FourCc::new(*b"ZZZZ"),
+        ];
+        for untyped in untyped {
             assert!(!untyped.is_typed());
             assert!(RawTag::new(untyped, vec![], vec![]).is_some());
         }
@@ -421,6 +453,18 @@ mod tests {
             (Tag::Path(AudioPath::new("/a")), FourCc::PPTH),
             (Tag::BeatGrid(BeatGrid::new(vec![])), FourCc::PQTZ),
             (Tag::Cues(CueList::memory([])), FourCc::PCOB),
+            (
+                Tag::WaveformPreview(WaveformPreview::new(vec![])),
+                FourCc::PWAV,
+            ),
+            (
+                Tag::TinyWaveformPreview(TinyWaveformPreview::new(vec![])),
+                FourCc::PWV2,
+            ),
+            (
+                Tag::WaveformDetail(WaveformDetail::new(vec![])),
+                FourCc::PWV3,
+            ),
         ];
         for (tag, code) in typed {
             assert_eq!(tag.fourcc(), code);

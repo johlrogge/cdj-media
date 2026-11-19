@@ -21,6 +21,45 @@ rekordbox-exported, CDJ-played stick.
 - Memory cues are not stored in time order: 58 of 68 lists with two or more cues aren't.
 - Undocumented tags seen: PQT2 (`.EXT`), PWVC and PVDI (`.2EX`). PWVC has
   `len_header` 14.
+- **PMAI header** (bytes 12..28; `len_header` is 28 in all 2,500 files): four u32 words.
+  The fourth is always 0. In `.DAT` files:
+  - `1, 0x00010000, 0x00010000, 0` in 793 of 848;
+  - the middle two words are 0 in the 22 `.DAT` files that have no `.EXT` or `.2EX`
+    next to them (17 with first word 1, 5 with 0). They look like stale analyses: 21 of
+    the 22 have no beats, and there are 826 tracks with analysis files but 848 `.DAT`s;
+  - the first word is 0 in 38: all 25 MP3 tracks, 8 AIFF tracks with nothing else in
+    common, and 5 of the stale files. No other field explains it.
+  - `.EXT` files: the modal header in 823 of 826, first word 0 in 3 (AIFF). `.2EX`: the
+    modal header in all 826.
+- **Tag order** is fixed in `.DAT`: `PPTH PVBR PQTZ PWAV PWV2 PCOB PCOB` in all 848, hot
+  cues first. `.EXT` is `PPTH PWV3 PCOB PCOB PCO2 PCO2 [PQT2] PWV5 PWV4 [PSSI]` (826
+  files): 625 with PQT2 only, 149 with both, 44 with neither, 8 with PSSI only. `.2EX` is
+  `PPTH PWV7 PWV6 PWVC [PVDI]`, PVDI in 99 of 826.
+- **PVBR**: `len_header` 16 with a zero u32, and a 1,604-byte body in all 848 `.DAT`
+  files. The body is all zero for every AIFF and WAV track (823) and non-zero for all 25
+  MP3 tracks.
+- **PWAV and PWV2**: `len_header` 0x14, as djl-analysis documents. The u32 at 0x0c is the
+  column count (400 and 100 in every file) and the u32 at 0x10 is `0x00010000` in all
+  848 files each; djl-analysis gives `00100000`, the same nibble shift as PQTZ
+  `unknown2`.
+  - PWAV whiteness (high three bits) takes 0 to 5, never 6 or 7; height (low five bits)
+    takes 0 and 2 to 25, never 1. Low columns are mostly whiteness 5 (heights 2 to 9),
+    loud ones mostly 0 to 3.
+  - PWV2 never sets a bit above the low four; heights 0 to 15 occur.
+  - The one silent track (no beats) has 400 PWAV columns of `0xa2` (height 2, whiteness
+    5) and 100 PWV2 columns of 1.
+  - PWV2 is not a simple reduction of PWAV: max/2, rounded max/2, max · 15/31, and the
+    mean or rounded mean over each 4 PWAV columns match all 100 columns in only one file
+    (the silent one).
+- **PWV3**: `len_header` 0x18; `len_entry_bytes` is 1, `len_entries` equals the body
+  length and the u32 at 0x14 is `0x00960000` in all 826 `.EXT` files, as djl-analysis
+  documents. Columns use all three whiteness bits (up to 7) and heights up to 31.
+- **Rebuilding `.DAT` files** (`tests/anlz_local.rs::real_stick_dat_files_rebuild_identically`):
+  `AnlzFile::track_dat` from each file's typed tags gives 793 of 848 back byte for byte.
+  The other 55 differ only in the PMAI header (30: the 22 stale files and the 8 AIFF
+  tracks with first word 0) or in the PMAI header and PVBR (the 25 MP3 tracks). With the
+  cue lists rebuilt from slots and spans by `CueList::hot` and `CueList::memory`, the
+  same 793 come back.
 - **PQTZ beat grids** (826 tracks with a `.DAT`, matched to their track row through the
   analysis path; `tests/beat_grid_local.rs`). Below, `t_n` is the time of beat `n` (0 for
   the first) and `I` = 60000 / BPM ms, from the stored tempo:

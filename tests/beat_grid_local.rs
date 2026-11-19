@@ -13,7 +13,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use cdj_media::anlz::{AnlzFile, Beat, BeatGrid, ConstantGrid, FourCc, Tag};
+use cdj_media::anlz::{AnlzFile, Beat, BeatGrid, ConstantGrid};
 use cdj_media::encoding::{BeatInBar, Millis};
 use cdj_media::pdb::{Database, Pdb};
 
@@ -54,10 +54,7 @@ fn samples() -> Option<Vec<Sample>> {
             .ok()
             .and_then(|bytes| {
                 let ext = AnlzFile::from_bytes(&bytes).ok()?;
-                match ext.tags_with(FourCc::PWV3).next()? {
-                    Tag::Raw(raw) => Some(raw.body().len()),
-                    _ => None,
-                }
+                Some(ext.waveform_detail()?.data().len())
             });
         out.push(Sample {
             beats,

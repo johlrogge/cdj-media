@@ -12,19 +12,25 @@
 //! Tags follow from offset `len_header` and tile the rest of the file exactly. See
 //! [`Tag`] for the tag framing.
 //!
-//! `PPTH`, `PQTZ` and `PCOB` are decoded into [`AudioPath`], [`BeatGrid`] and [`CueList`]
-//! (see ADR-004); every other tag is kept as a [`RawTag`].
+//! `PPTH`, `PQTZ`, `PCOB`, `PWAV`, `PWV2` and `PWV3` are decoded into [`AudioPath`],
+//! [`BeatGrid`], [`CueList`], [`WaveformPreview`], [`TinyWaveformPreview`] and
+//! [`WaveformDetail`] (see ADR-004); every other tag is kept as a [`RawTag`].
+//! [`AnlzFile::track_dat`] builds a whole `.DAT` file from typed values.
 
 mod beat_grid;
 mod cues;
 pub(crate) mod defaults;
 mod path;
 mod tag;
+mod waveform;
 
 pub use beat_grid::{Beat, BeatGrid, ConstantGrid};
 pub use cues::{Cue, CueList, CueListKind, CueSpan, HotCueSlot};
 pub use path::AudioPath;
 pub use tag::{FourCc, RawTag, Tag};
+pub use waveform::{
+    PREVIEW_COLUMNS, TINY_PREVIEW_COLUMNS, TinyWaveformPreview, WaveformDetail, WaveformPreview,
+};
 
 use crate::bytes::{Reader, Writer};
 use crate::error::{DecodeContext, DecodeError, DecodeErrorKind, EncodeError};
@@ -52,6 +58,61 @@ impl AnlzFile {
             unknown_header,
             tags,
         }
+    }
+
+    /// Builds a track's `.DAT` file the way rekordbox writes it: the tags `PPTH`, `PVBR`,
+    /// `PQTZ`, `PWAV`, `PWV2` and `PCOB` twice (hot cues, then memory points), in that
+    /// order, after rekordbox's file header.
+    ///
+    /// `path` is the audio file path tag (see
+    /// [`layout::audio_path_tag`](crate::layout::audio_path_tag)). Every value is written as
+    /// given; build the cue lists with [`CueList::hot`] and [`CueList::memory`], which
+    /// compute rekordbox's order links and `memory_count`. Callers without waveform data
+    /// can pass [`WaveformPreview::flat`] and [`TinyWaveformPreview::flat`].
+    ///
+    /// The `PVBR` seek index is all zeros, as rekordbox writes it for AIFF and WAV files
+    /// (all 823 on the fixture); MP3 files get a real index, which this crate can't compute.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EncodeError::ValueOutOfRange`] when `hot_cues` is not of kind
+    /// [`CueListKind::Hot`] or `memory_cues` is not of kind [`CueListKind::Memory`].
+    pub fn track_dat(
+        path: AudioPath,
+        beat_grid: BeatGrid,
+        hot_cues: CueList,
+        memory_cues: CueList,
+        preview: WaveformPreview,
+        tiny_preview: TinyWaveformPreview,
+    ) -> Result<Self, EncodeError> {
+        if hot_cues.kind() != CueListKind::Hot {
+            return Err(EncodeError::ValueOutOfRange {
+                context: "PCOB hot cue list kind",
+            });
+        }
+        if memory_cues.kind() != CueListKind::Memory {
+            return Err(EncodeError::ValueOutOfRange {
+                context: "PCOB memory point list kind",
+            });
+        }
+        let vbr = RawTag::new(
+            FourCc::PVBR,
+            defaults::PVBR_HEADER.to_vec(),
+            vec![0; defaults::PVBR_BODY_LEN],
+        )
+        .expect("PVBR is not a typed fourcc");
+        Ok(Self::new(
+            defaults::PMAI_UNKNOWN_HEADER.to_vec(),
+            vec![
+                Tag::Path(path),
+                Tag::Raw(vbr),
+                Tag::BeatGrid(beat_grid),
+                Tag::WaveformPreview(preview),
+                Tag::TinyWaveformPreview(tiny_preview),
+                Tag::Cues(hot_cues),
+                Tag::Cues(memory_cues),
+            ],
+        ))
     }
 
     /// The file-header bytes `12..len_header`, which are not understood.
@@ -95,6 +156,30 @@ impl AnlzFile {
     /// The memory points: the first `PCOB` tag whose kind is [`CueListKind::Memory`].
     pub fn memory_cues(&self) -> Option<&CueList> {
         self.cue_list(CueListKind::Memory)
+    }
+
+    /// The waveform preview: the first `PWAV` tag. Real `.DAT` files have one.
+    pub fn waveform_preview(&self) -> Option<&WaveformPreview> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::WaveformPreview(preview) => Some(preview),
+            _ => None,
+        })
+    }
+
+    /// The tiny waveform preview: the first `PWV2` tag. Real `.DAT` files have one.
+    pub fn tiny_waveform_preview(&self) -> Option<&TinyWaveformPreview> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::TinyWaveformPreview(preview) => Some(preview),
+            _ => None,
+        })
+    }
+
+    /// The waveform detail: the first `PWV3` tag. Real `.EXT` files have one.
+    pub fn waveform_detail(&self) -> Option<&WaveformDetail> {
+        self.tags.iter().find_map(|tag| match tag {
+            Tag::WaveformDetail(detail) => Some(detail),
+            _ => None,
+        })
     }
 
     fn cue_list(&self, kind: CueListKind) -> Option<&CueList> {
@@ -397,6 +482,147 @@ mod tests {
         );
     }
 
+    /// A waveform tag header by hand: a count, then `unknown`.
+    fn counted_header(count: u32, unknown: u32) -> Vec<u8> {
+        [count.to_be_bytes(), unknown.to_be_bytes()].concat()
+    }
+
+    #[test]
+    fn waveform_tags_decode_typed_and_round_trip() {
+        let mut detail_header = 1u32.to_be_bytes().to_vec();
+        detail_header.extend(counted_header(2, 0x0096_0000));
+        let bytes = file_bytes(
+            &UNKNOWN,
+            &[
+                tag_bytes(b"PWAV", &counted_header(2, 0x0001_0000), &[0xa2, 0x17]),
+                tag_bytes(b"PWV2", &counted_header(1, 0x0001_0000), &[0x0f]),
+                tag_bytes(b"PWV3", &detail_header, &[0xff, 0x01]),
+            ],
+        );
+        let expected = AnlzFile::new(
+            UNKNOWN.to_vec(),
+            vec![
+                Tag::WaveformPreview(WaveformPreview::new(vec![0xa2, 0x17])),
+                Tag::TinyWaveformPreview(TinyWaveformPreview::new(vec![0x0f])),
+                Tag::WaveformDetail(WaveformDetail::new(vec![0xff, 0x01])),
+            ],
+        );
+        assert_round_trip(&bytes, &expected);
+        let preview = expected.waveform_preview().unwrap();
+        assert_eq!(preview.data(), [0xa2, 0x17]);
+        let tiny = expected.tiny_waveform_preview().unwrap();
+        assert_eq!(tiny.data(), [0x0f]);
+        let detail = expected.waveform_detail().unwrap();
+        assert_eq!(detail.data(), [0xff, 0x01]);
+        let empty = AnlzFile::new(vec![], vec![]);
+        assert!(empty.waveform_preview().is_none());
+        assert!(empty.tiny_waveform_preview().is_none());
+        assert!(empty.waveform_detail().is_none());
+    }
+
+    #[test]
+    fn track_dat_writes_rekordbox_tag_order_and_defaults() {
+        let point = |ms| CueSpan::Point(crate::encoding::Millis::new(ms));
+        let grid = BeatGrid::new(vec![Beat::new(
+            crate::encoding::BeatInBar::One,
+            crate::encoding::Bpm::from_centi(12_000),
+            crate::encoding::Millis::new(500),
+        )]);
+        let hot = CueList::hot([(HotCueSlot::A, point(1))]);
+        let memory = CueList::memory([point(2), point(3)]);
+        let file = AnlzFile::track_dat(
+            AudioPath::new("/Contents/a/b/c.aiff"),
+            grid.clone(),
+            hot.clone(),
+            memory.clone(),
+            WaveformPreview::flat(2),
+            TinyWaveformPreview::flat(1),
+        )
+        .unwrap();
+
+        assert_eq!(
+            file.unknown_header(),
+            [0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+        );
+        let codes: Vec<FourCc> = file.tags().iter().map(Tag::fourcc).collect();
+        assert_eq!(
+            codes,
+            [
+                FourCc::PPTH,
+                FourCc::PVBR,
+                FourCc::PQTZ,
+                FourCc::PWAV,
+                FourCc::PWV2,
+                FourCc::PCOB,
+                FourCc::PCOB,
+            ]
+        );
+        let Tag::Raw(vbr) = &file.tags()[1] else {
+            panic!("PVBR is raw");
+        };
+        assert_eq!(vbr.header(), [0; 4]);
+        assert_eq!(vbr.body(), [0; 1604]);
+        assert_eq!(file.path(), Some("/Contents/a/b/c.aiff"));
+        assert_eq!(file.beat_grid(), Some(&grid));
+        assert_eq!(file.hot_cues(), Some(&hot));
+        assert_eq!(file.memory_cues(), Some(&memory));
+        assert_eq!(file.waveform_preview(), Some(&WaveformPreview::flat(2)));
+        assert_eq!(
+            file.tiny_waveform_preview(),
+            Some(&TinyWaveformPreview::flat(1))
+        );
+
+        let bytes = file.to_bytes().unwrap();
+        assert_round_trip(&bytes, &file);
+    }
+
+    #[test]
+    fn track_dat_rejects_cue_lists_of_the_wrong_kind() {
+        let build = |hot: CueList, memory: CueList| {
+            AnlzFile::track_dat(
+                AudioPath::new("/a"),
+                BeatGrid::new(vec![]),
+                hot,
+                memory,
+                WaveformPreview::flat(0),
+                TinyWaveformPreview::flat(0),
+            )
+        };
+        let hot_error = Err(EncodeError::ValueOutOfRange {
+            context: "PCOB hot cue list kind",
+        });
+        let memory_error = Err(EncodeError::ValueOutOfRange {
+            context: "PCOB memory point list kind",
+        });
+        let other = || CueList::new(CueListKind::Other(7), vec![]);
+
+        assert_eq!(build(CueList::memory([]), CueList::memory([])), hot_error);
+        assert_eq!(build(other(), CueList::memory([])), hot_error);
+        assert_eq!(build(CueList::hot([]), CueList::hot([])), memory_error);
+        assert_eq!(build(CueList::hot([]), other()), memory_error);
+        assert!(build(CueList::hot([]), CueList::memory([])).is_ok());
+    }
+
+    #[test]
+    fn waveform_tag_that_fails_to_parse_is_an_error_not_raw() {
+        // A PWAV that declares more columns than its body holds.
+        let bytes = file_bytes(
+            &UNKNOWN,
+            &[tag_bytes(b"PWAV", &counted_header(3, 0x0001_0000), &[1])],
+        );
+        assert_eq!(
+            decode_err(&bytes),
+            (
+                28 + 0x0c,
+                "PWAV len_preview",
+                DecodeErrorKind::LengthMismatch {
+                    declared: 3,
+                    actual: 1,
+                }
+            )
+        );
+    }
+
     #[test]
     fn tag_with_odd_len_header_round_trips() {
         let tag = tag_bytes(b"PWVC", &[0xaa, 0xbb], &[1, 2, 3]);
@@ -593,7 +819,7 @@ mod tests {
     /// Codes this crate keeps raw; typed codes are generated by the typed strategies.
     fn untyped_fourcc() -> impl Strategy<Value = FourCc> {
         prop_oneof![
-            Just(FourCc::PWAV),
+            Just(FourCc::PVBR),
             Just(FourCc::PCO2),
             Just(FourCc::new(*b"PCPT")),
             any::<[u8; 4]>()
@@ -733,8 +959,44 @@ mod tests {
             })
     }
 
+    fn waveform_tag() -> impl Strategy<Value = Tag> {
+        (
+            0u8..3,
+            any::<u32>(),
+            tail(),
+            vec(any::<u8>(), 0..32),
+            tail(),
+        )
+            .prop_map(|(which, u1, header_tail, columns, body_tail)| match which {
+                0 => Tag::WaveformPreview(
+                    WaveformPreview::new(columns)
+                        .with_unknown1(u1)
+                        .with_header_tail(header_tail)
+                        .with_body_tail(body_tail),
+                ),
+                1 => Tag::TinyWaveformPreview(
+                    TinyWaveformPreview::new(columns)
+                        .with_unknown1(u1)
+                        .with_header_tail(header_tail)
+                        .with_body_tail(body_tail),
+                ),
+                _ => Tag::WaveformDetail(
+                    WaveformDetail::new(columns)
+                        .with_unknown1(u1)
+                        .with_header_tail(header_tail)
+                        .with_body_tail(body_tail),
+                ),
+            })
+    }
+
     fn tag() -> impl Strategy<Value = Tag> {
-        prop_oneof![raw_tag(), path_tag(), beat_grid_tag(), cue_list_tag()]
+        prop_oneof![
+            raw_tag(),
+            path_tag(),
+            beat_grid_tag(),
+            cue_list_tag(),
+            waveform_tag(),
+        ]
     }
 
     fn anlz_file() -> impl Strategy<Value = AnlzFile> {

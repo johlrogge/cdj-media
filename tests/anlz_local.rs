@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
-use cdj_media::anlz::{AnlzFile, BeatGrid, Cue, CueList, CueListKind, CueSpan, HotCueSlot, Tag};
+use cdj_media::anlz::{
+    AnlzFile, AudioPath, BeatGrid, Cue, CueList, CueListKind, CueSpan, FourCc, HotCueSlot, Tag,
+    TinyWaveformPreview, WaveformDetail, WaveformPreview,
+};
 use cdj_media::encoding::Millis;
 
 /// Extensions of ANLZ files, upper case.
@@ -51,6 +54,9 @@ struct Counts {
     hot_cues: usize,
     memory_cues: usize,
     loops: usize,
+    previews: usize,
+    tiny_previews: usize,
+    details: usize,
 }
 
 /// Decodes and re-encodes one file and checks its typed tags; returns its tag codes, or why
@@ -84,8 +90,14 @@ fn round_trip(path: &Path, ext: &str, counts: &mut Counts) -> Result<Vec<String>
                 counts.beats += grid.beats().len();
             }
             Tag::Cues(_) => counts.cue_lists += 1,
+            Tag::WaveformPreview(_) => counts.previews += 1,
+            Tag::TinyWaveformPreview(_) => counts.tiny_previews += 1,
+            Tag::WaveformDetail(_) => counts.details += 1,
             _ => {}
         }
+    }
+    if ext == "EXT" && file.waveform_detail().is_none() {
+        return Err("no PWV3 waveform detail".into());
     }
 
     if ext == "DAT" {
@@ -94,6 +106,9 @@ fn round_trip(path: &Path, ext: &str, counts: &mut Counts) -> Result<Vec<String>
         }
         if file.beat_grid().is_none() {
             return Err("no PQTZ beat grid".into());
+        }
+        if file.waveform_preview().is_none() || file.tiny_waveform_preview().is_none() {
+            return Err("no PWAV or PWV2 waveform preview".into());
         }
         let hot = file.hot_cues().ok_or("no hot cue list")?;
         let memory = file.memory_cues().ok_or("no memory cue list")?;
@@ -151,6 +166,17 @@ fn real_stick_anlz_files_round_trip_identically() {
     eprintln!(
         ".DAT cues: {} hot, {} memory, {} loops",
         counts.hot_cues, counts.memory_cues, counts.loops
+    );
+    eprintln!(
+        "typed waveforms: {} PWAV, {} PWV2, {} PWV3",
+        counts.previews, counts.tiny_previews, counts.details
+    );
+    // One of each per file, and none fell back to `Raw` (checked per tag above).
+    let files_with = |ext| per_extension.get(ext).copied().unwrap_or(0);
+    assert_eq!(
+        (counts.previews, counts.tiny_previews, counts.details),
+        (files_with("DAT"), files_with("DAT"), files_with("EXT")),
+        "typed waveform tags per file"
     );
     assert!(
         failures.is_empty(),
@@ -265,6 +291,206 @@ fn real_stick_cue_list_builders_match_rekordbox() {
     );
 }
 
+/// The typed contents [`AnlzFile::track_dat`] takes, cloned from a decoded `.DAT` file.
+struct DatParts {
+    path: AudioPath,
+    grid: BeatGrid,
+    hot: CueList,
+    memory: CueList,
+    preview: WaveformPreview,
+    tiny: TinyWaveformPreview,
+}
+
+impl DatParts {
+    fn of(file: &AnlzFile) -> Option<Self> {
+        let path = file.tags().iter().find_map(|tag| match tag {
+            Tag::Path(path) => Some(path.clone()),
+            _ => None,
+        })?;
+        Some(Self {
+            path,
+            grid: file.beat_grid()?.clone(),
+            hot: file.hot_cues()?.clone(),
+            memory: file.memory_cues()?.clone(),
+            preview: file.waveform_preview()?.clone(),
+            tiny: file.tiny_waveform_preview()?.clone(),
+        })
+    }
+
+    fn build(self) -> AnlzFile {
+        AnlzFile::track_dat(
+            self.path,
+            self.grid,
+            self.hot,
+            self.memory,
+            self.preview,
+            self.tiny,
+        )
+        .expect("hot and memory lists")
+    }
+}
+
+/// Why a rebuilt `.DAT` differs from rekordbox's, or that it doesn't.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Rebuild {
+    Identical,
+    /// Only the not-understood `PMAI` header bytes differ.
+    PmaiHeader,
+    /// Only the `PVBR` seek index differs (MP3 tracks have one).
+    Pvbr,
+    PmaiHeaderAndPvbr,
+    Other,
+}
+
+/// Rebuilds `file` from its typed contents with [`AnlzFile::track_dat`] and classifies the
+/// result against `bytes`, the original.
+fn rebuild(file: &AnlzFile, bytes: &[u8]) -> Rebuild {
+    let Some(parts) = DatParts::of(file) else {
+        return Rebuild::Other;
+    };
+    let built = parts.build();
+    if built.to_bytes().expect("encodes") == bytes {
+        return Rebuild::Identical;
+    }
+    let vbr = |f: &AnlzFile| f.tags_with(FourCc::PVBR).next().cloned();
+    let header_differs = built.unknown_header() != file.unknown_header();
+    let vbr_differs = vbr(&built) != vbr(file);
+    // With rekordbox's header and seek index put back, nothing else may differ.
+    let patched: Vec<Tag> = built
+        .tags()
+        .iter()
+        .map(|tag| match tag.fourcc() {
+            FourCc::PVBR => vbr(file).expect("original PVBR"),
+            _ => tag.clone(),
+        })
+        .collect();
+    let patched = AnlzFile::new(file.unknown_header().to_vec(), patched);
+    if patched.to_bytes().expect("encodes") != bytes {
+        return Rebuild::Other;
+    }
+    match (header_differs, vbr_differs) {
+        (true, false) => Rebuild::PmaiHeader,
+        (false, true) => Rebuild::Pvbr,
+        (true, true) => Rebuild::PmaiHeaderAndPvbr,
+        (false, false) => Rebuild::Other,
+    }
+}
+
+/// Acceptance test for [`AnlzFile::track_dat`]: rebuilds every `.DAT` from its typed
+/// contents and compares bytes. Prints counts by category only.
+#[test]
+fn real_stick_dat_files_rebuild_identically() {
+    let Some(dir) = common::local_fixture("real-stick/PIONEER/USBANLZ") else {
+        return;
+    };
+    let mut outcomes: BTreeMap<Rebuild, usize> = BTreeMap::new();
+    let mut from_domain = 0;
+    let mut total = 0;
+    for (path, ext) in anlz_files(&dir) {
+        if ext != "DAT" {
+            continue;
+        }
+        total += 1;
+        let bytes = std::fs::read(&path).expect("read");
+        let file = AnlzFile::from_bytes(&bytes).expect("decode");
+        *outcomes.entry(rebuild(&file, &bytes)).or_default() += 1;
+
+        // Also from domain data only: cue slots and spans, not the decoded lists.
+        if let Some(mut parts) = DatParts::of(&file) {
+            let slots: Option<Vec<_>> = parts
+                .hot
+                .cues()
+                .iter()
+                .map(|cue| Some((cue.hot_cue()?, cue.span())))
+                .collect();
+            parts.hot = CueList::hot(slots.expect("hot cues have slots"));
+            parts.memory = CueList::memory(parts.memory.cues().iter().map(Cue::span));
+            from_domain += usize::from(parts.build().to_bytes().expect("encodes") == bytes);
+        }
+    }
+    eprintln!("rebuilt {total} .DAT files with AnlzFile::track_dat:");
+    for (outcome, count) in &outcomes {
+        eprintln!("  {count:5} {outcome:?}");
+    }
+    eprintln!("  {from_domain} identical with cue lists rebuilt from slots and spans");
+    // Pinned to the current fixture. The 30 header-only files are the 22 stale `.DAT`
+    // files without an `.EXT` plus 8 AIFF tracks whose first header word is 0; the 25 are
+    // the MP3 tracks, whose first header word is 0 and whose PVBR holds a seek index.
+    let expected: BTreeMap<Rebuild, usize> = [
+        (Rebuild::Identical, 793),
+        (Rebuild::PmaiHeader, 30),
+        (Rebuild::PmaiHeaderAndPvbr, 25),
+    ]
+    .into();
+    assert_eq!(outcomes, expected, "rebuild outcomes");
+    assert_eq!(
+        from_domain, 793,
+        "identical with cue lists from slots and spans"
+    );
+}
+
+/// Survey of tag order and file headers by extension; checks that every `.DAT` has the
+/// order [`AnlzFile::track_dat`] writes. Prints counts and shapes only.
+#[test]
+fn real_stick_anlz_tag_orders() {
+    let Some(dir) = common::local_fixture("real-stick/PIONEER/USBANLZ") else {
+        return;
+    };
+    let built = DatParts {
+        path: AudioPath::new("/a"),
+        grid: BeatGrid::new(vec![]),
+        hot: CueList::hot([]),
+        memory: CueList::memory([]),
+        preview: WaveformPreview::flat(0),
+        tiny: TinyWaveformPreview::flat(0),
+    }
+    .build();
+    let order = |file: &AnlzFile| {
+        let codes: Vec<String> = file.tags().iter().map(|t| t.fourcc().to_string()).collect();
+        codes.join(",")
+    };
+    let built_order = order(&built);
+
+    let mut orders: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut headers: BTreeMap<(String, Vec<u8>), usize> = BTreeMap::new();
+    let mut dat_in_built_order = 0;
+    let mut dat_files = 0;
+    let detail_default = WaveformDetail::new(vec![]).unknown1();
+    let (mut ext_files, mut details_with_default) = (0, 0);
+    for (path, ext) in anlz_files(&dir) {
+        let bytes = std::fs::read(&path).expect("read");
+        let file = AnlzFile::from_bytes(&bytes).expect("decode");
+        let file_order = order(&file);
+        if ext == "DAT" {
+            dat_files += 1;
+            dat_in_built_order += usize::from(file_order == built_order);
+        }
+        if ext == "EXT" {
+            ext_files += 1;
+            let unknown1 = file.waveform_detail().map(WaveformDetail::unknown1);
+            details_with_default += usize::from(unknown1 == Some(detail_default));
+        }
+        *orders.entry((ext.clone(), file_order)).or_default() += 1;
+        *headers
+            .entry((ext, file.unknown_header().to_vec()))
+            .or_default() += 1;
+    }
+    eprintln!("tag orders:");
+    for ((ext, order), count) in &orders {
+        eprintln!("  {count:5} .{ext} {order}");
+    }
+    eprintln!("PMAI header bytes 12..:");
+    for ((ext, header), count) in &headers {
+        eprintln!("  {count:5} .{ext} {header:02x?}");
+    }
+    eprintln!("PWV3 unknown1 {detail_default:#010x} in {details_with_default} of {ext_files} .EXT");
+    assert_eq!(
+        dat_in_built_order, dat_files,
+        ".DAT files in the order track_dat writes ({built_order})"
+    );
+    assert_eq!(details_with_default, ext_files, "PWV3 unknown1 default");
+}
+
 /// Distribution of one field's values.
 #[derive(Default)]
 struct Histogram(BTreeMap<String, usize>);
@@ -297,6 +523,18 @@ fn real_stick_defaults_are_modal() {
     let mut fields: BTreeMap<&str, Histogram> = BTreeMap::new();
     for (_, file) in &files {
         let grid = file.beat_grid().expect("beat grid");
+        fields
+            .entry("PMAI unknown header")
+            .or_default()
+            .add(file.unknown_header());
+        fields
+            .entry("PWAV unknown1")
+            .or_default()
+            .add(file.waveform_preview().expect("PWAV").unknown1());
+        fields
+            .entry("PWV2 unknown1")
+            .or_default()
+            .add(file.tiny_waveform_preview().expect("PWV2").unknown1());
         fields
             .entry("PQTZ unknown1")
             .or_default()
@@ -354,7 +592,21 @@ fn real_stick_defaults_are_modal() {
     let grid = BeatGrid::new(vec![]);
     let list = CueList::new(CueListKind::Hot, vec![]);
     let cue = Cue::hot(HotCueSlot::A, CueSpan::Point(Millis::new(0)));
-    let expected: [(&str, &dyn Debug); 11] = [
+    let dat = AnlzFile::track_dat(
+        AudioPath::new("/a"),
+        grid.clone(),
+        list.clone(),
+        CueList::memory([]),
+        WaveformPreview::new(vec![]),
+        TinyWaveformPreview::new(vec![]),
+    )
+    .expect("hot and memory lists");
+    let preview = dat.waveform_preview().expect("PWAV").unknown1();
+    let tiny = dat.tiny_waveform_preview().expect("PWV2").unknown1();
+    let expected: [(&str, &dyn Debug); 14] = [
+        ("PMAI unknown header", &dat.unknown_header()),
+        ("PWAV unknown1", &preview),
+        ("PWV2 unknown1", &tiny),
         ("PQTZ unknown1", &grid.unknown1()),
         ("PQTZ unknown2", &grid.unknown2()),
         ("PCOB unknown1", &list.unknown1()),
