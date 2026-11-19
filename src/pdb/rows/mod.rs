@@ -86,6 +86,24 @@ impl ExportRow {
         }
     }
 
+    /// The table the row belongs to.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
+    )]
+    pub(crate) fn table(&self) -> ExportTable {
+        match self {
+            Self::Track(_) => ExportTable::Tracks,
+            Self::Genre(_) => ExportTable::Genres,
+            Self::Artist(_) => ExportTable::Artists,
+            Self::Album(_) => ExportTable::Albums,
+            Self::Label(_) => ExportTable::Labels,
+            Self::Key(_) => ExportTable::Keys,
+            Self::Color(_) => ExportTable::Colors,
+            Self::Artwork(_) => ExportTable::Artwork,
+        }
+    }
+
     /// The row's `index_shift`, for the rows that have one: tracks, artists and albums.
     #[cfg_attr(
         not(test),
@@ -229,6 +247,13 @@ mod tests {
                 ExportRow::Artwork(Artwork::new(ArtworkId::new(7).unwrap(), "/a.jpg")),
             ),
         ]
+    }
+
+    #[test]
+    fn a_row_knows_its_table() {
+        for (table, row) in built_rows() {
+            assert_eq!(row.table(), table);
+        }
     }
 
     #[test]

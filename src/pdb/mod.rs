@@ -44,7 +44,7 @@ mod testutil;
     not(test),
     expect(
         dead_code,
-        reason = "Database::to_pdb lays out pages with it in slice 7d"
+        reason = "Database::to_pdb writes files with it from slice 7e on"
     )
 )]
 mod writer;

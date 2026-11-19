@@ -225,4 +225,56 @@ rekordbox-exported, CDJ-played stick.
     that row; on 72 of those 75 the next page has a higher `sequence`, which fits rows
     added in a later update rather than a layout rule. Packing a whole table therefore gives fewer pages than the
     stick has (artwork 8 against 31, tracks 92 against 178).
+- **File layout** (331 pages; checked by `src/pdb/writer/local_file.rs`):
+  - Header: `unknown1` 0, `len_page` 4,096, 20 tables, `unknown2` 1, `sequence` 15,493,
+    `unknown3` 0, and zero after the table pointers. The tables are types 0 to 19 in type
+    order, including the unnamed 9, 10, 14, 15, 17 and 18.
+  - Table `t` (its type) starts with its index page at page 2t + 1. Page 2t + 2 is its
+    first data page, or, for the 4 tables without data pages (9, 10, 14, 15), its
+    `empty_candidate`. So pages 1–40 look like the database's creation; every later page
+    came with later updates. No table with two or more data pages has them contiguous:
+    they are interleaved with other tables' (tracks run 1, 2, 49, 52, 70, …).
+  - Every `empty_candidate` is a page of its own, in no chain. The 18 pages no chain
+    reaches are exactly the `empty_candidate`s inside the file, all zero; 2 (tracks 332,
+    playlist entries 331) are past the end. `next_unused_page` (333) is one past the
+    highest of the file's pages and the `empty_candidate`s.
+  - The header's `sequence` is one more than the highest page `sequence` (15,492). Index
+    pages of the 8 tables without deleted rows have `sequence` 1. The three one-page
+    tables never rewritten have low data-page `sequence`s: colours 2, columns 3, table 18
+    5, which looks like creation order. The other pages' `sequence`s record later writes
+    and follow no page order.
+  - Rebuilding the file from its decoded pages, its table pointers and those two header
+    rules gives it back byte for byte.
+- **Index pages** (the first page of every table): header flags 0x64, `unknown1`,
+  `unknown2`, the row counts, `free_size` and `used_size` 0; `next_page` is the first data
+  page, or the `empty_candidate` for a table without one. After the 0x20-byte header:
+  - 0x00: two `u16` 0x1fff (the value a data page's transaction fields take without a
+    transaction); 0x04: the number of entry slots, 0x3ec (1,004), which is what the page
+    leaves for them: (4,096 − 0x20 − 0x1c − 0x14) / 4; 0x06: a `u16`, 0 without entries,
+    1 to 169 with them, at least the entry count (not derived); 0x08: the page's own index;
+    0x0c: the first data page, or 0x03ffffff without one; 0x10: 0x03ffffff; 0x14: 0;
+    0x18: the number of entries; 0x1a: 0x1fff, or 1 (artists, albums, artwork) or 16
+    (tracks) on tables with entries (not derived); 0x1c: 1,004 `u32` entry slots; then
+    0x14 zero bytes.
+  - An entry is a page index shifted left 3, with 3 flag bits (0 in every entry); an empty
+    slot is 0x1ffffff8 (0x03ffffff shifted). The entries name exactly the table's data
+    pages with deleted rows (12 tables, 1 to 168 entries), which fits djl-analysis' "find
+    free space". The 8 tables without deleted rows have empty index pages, and building an
+    empty index page from the page's links gives all 8 back byte for byte; the other 12
+    equal the built page except for the entries, their count and the two `u16`s above.
+- **Untyped tables:** playlist tree 2 data pages (229 row offsets, 32 present), playlist
+  entries 6 (903 present rows of 12 bytes), history playlists 7 (10 present), history
+  entries 7 (83 present), history 1 (1 present of 96), table 17 2 pages (22 present rows of
+  8 bytes, rewritten: `sequence` 2,326 to 2,332), table 18 1 page (17 rows of 8 bytes,
+  `sequence` 5, never rewritten). Tables 9, 10, 14 and 15 are empty.
+- **Fixed tables:** the colour and column tables are one data page each, written once in
+  one transaction. The 8 colour rows (ids 1–8) and the 27 column rows equal rekordbox's
+  defaults: building each page from the defaults (`writer::fixed`) with its links gives it
+  back byte for byte. A column row is an id (`u16`, 1–27), a second `u16` (0x80 to 0xaa,
+  not in id order) and the label as UTF-16LE between U+FFFA and U+FFFB (`GENRE`,
+  `ARTIST`, …, `MATCHING`); it takes its length rounded up to 4 in the heap.
+- **A fresh file from the stick's rows** (`write_pdb`): 144 pages against 331 (tracks 92
+  data pages against 178, artwork 8 against 31, the small tables 1 to 4 against 5 to 20),
+  `next_unused_page` 153, `sequence` 114. All 2,221 typed rows come back in order, and it
+  loads into the same `Database` as the stick, with no dangling reference.
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).
