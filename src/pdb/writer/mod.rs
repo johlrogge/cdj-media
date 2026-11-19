@@ -295,6 +295,8 @@ mod index;
 mod local;
 #[cfg(test)]
 mod local_file;
+#[cfg(test)]
+mod local_fresh;
 
 #[cfg(test)]
 mod tests {

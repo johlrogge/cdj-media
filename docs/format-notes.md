@@ -304,3 +304,95 @@ rekordbox-exported, CDJ-played stick.
     the order records first appear and doesn't reuse the ids of deleted records. Key ids
     follow another order (0 of 43). Rebuilding in page order matches almost nothing.
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).
+
+## Fresh export (rekordbox-hw1)
+
+A second fixture, `local-fixtures/rekordbox-hw1`: rekordbox exported one playlist of 6
+tracks to an empty stick, and real CDJs play it and show the playlist. The 6 tracks are on the
+old stick too. Checked by `src/pdb/writer/local_fresh.rs` (pages) and
+`tests/fresh_export_local.rs` (rows, ANLZ, other files).
+
+- **Not one transaction.** A fresh export is written row by row, with rewrites, not packed in
+  one go:
+  - 9 track row versions for 6 tracks on 2 data pages (pages 2 and 50, both with deleted rows,
+    flags 0x34). Tracks 3, 4 and 5 were written twice. The deleted version differs from the
+    present one only in `index_shift` and `artwork_id`, so the artwork was added after the
+    track. Two present rows sit in the slots of earlier, longer rows (heap spans of 556 and 500
+    bytes for footprints of 548 and 368, with leftover bytes). Without the rewrites `pack`
+    puts the 6 tracks on one page.
+  - Table 19 (history) has 7 row versions of 40 bytes, only the last present.
+  - The transaction fields record the last write: `transaction_row_count` 1, the index of the
+    last row and its `tranrf` bit on the artist, album, key, artwork and playlist-entry pages
+    (2 rows on track page 50 and the history page). Whole-page values only on colours,
+    columns, tables 17 and 18 and the one-row genre and playlist-tree pages.
+- **Header:** `unknown1` 0, `len_page` 4,096, `unknown2` **5** (the old stick has 1),
+  `unknown3` 0, zero tail; 51 pages. `sequence` is 49, **4** more than the highest page
+  `sequence` (45). `next_unused_page` is 55, one past the highest `empty_candidate`.
+  `exportExt.pdb` also has `unknown2` 5 (`sequence` 7, 18 pages, `next_unused_page` 22).
+- **Layout:** 20 tables, types 0 to 19 in order; table `t`'s index page at 2t + 1 and its
+  first data page or `empty_candidate` at 2t + 2, for all 20. The one further data page is
+  tracks' page 50. The `empty_candidate`s from page 41 on are, in page order, those of
+  history (41), colours, columns, 17, 18, playlist tree, artists, albums, keys (49), then
+  artwork, playlist entries, genres and tracks (51–54, past the end of the file). That is no
+  type order; it looks like the order of the tables' writes, and page 50 was once tracks'
+  candidate. The 16 unchained pages are exactly the candidates inside the file, all zero.
+- **Sequences** are a write counter, not 1, 2, 3, … in page order. Index pages have 1 except
+  tracks (44) and history (17), the tables with deleted rows. Data pages: colours 2, columns
+  3, table 17 4, table 18 5, playlist tree 6, genres 22, albums 36, artwork 39, track page 50
+  40, artists 42, keys 43, track page 2 44, history 44, playlist entries 45.
+- **Index pages:** the 18 of tables without deleted rows equal `build_index_page`. Tracks and
+  history list exactly their data pages with deleted rows (2 and 50; 40), with flags 0, the
+  u16 at 0x06 equal to the entry count, and the rest as built.
+- **Data pages:** flags 0x24 on all 11 without deleted rows and 0x34 on all 3 with them;
+  unknowns 0, the heap zero after `used_size` and `free_size` as computed on all 14. Every
+  typed page without deleted rows (genres, artists, albums, keys, colours, artwork) rebuilds
+  byte for byte with `build_data_page` from its rows and its recorded transaction fields, so
+  row bytes, footprints and heap layout are the writer's.
+- **Fixed tables:** the colour and column pages equal the built defaults. Tables 17 and 18
+  have rows in a fresh export: 22 and 17 rows of 8 bytes, one page each, written at creation.
+  Table 18's heap equals the old stick's byte for byte; table 17 shares 13 of 22 rows with
+  the old stick, so it holds values that changed there.
+- **Playlists:** the playlist tree has one row: u32s parent 0, unknown 0, sort order 0, id 1,
+  folder flag 0, then the name at 0x14 (short ASCII, 13 characters), 34 bytes padded to 36.
+  Playlist entries are 6 rows of 12 bytes, (entry index, track id, playlist id) = (k, k, 1)
+  for k = 1 to 6. History playlists and history entries are empty (an index page only).
+- **Table 19 (history):** 40-byte rows: u16 0x0280, u16 0x20 × slot (an `index_shift`), u32
+  0 to 6 rising with each version, 4 zero bytes, then a 10-character date-shaped string, two
+  bytes 0x19 0x1e (offsets of the next two strings), a 4-digit string and an empty string.
+  The versions are equal from byte 8 on.
+- **Against `write_pdb`** from the export's own typed rows: ours has 40 pages,
+  `next_unused_page` 49, `sequence` 10 and `unknown2` 1. 21 pages are identical (the empty
+  index pages and zero candidate pages at 2t + 2). The rest differ in links and sequences,
+  the transaction fields, the track pages, the index and data pages of the playlist tree,
+  playlist entries, tables 17 and 18 and history, and every page from 40 on, past our end.
+- **Track rows:** `subtype`, `bitmask` (0xc0700), `unknown3`, `unknown4`, `unknown5` and
+  `unknown7` are the builder's defaults on all 6. `unknown2` is not the track id (26 to 28
+  bits) and **equals the old stick's `unknown2` for the same audio file on all 6**, as do
+  the analysis paths and dates: it is a stable per-track value of the rekordbox library, not
+  random per export. Slots 2, 3 and 4 hold numbers that vary per track, none equal to the
+  builder's ("2", "1", ""); slots 8, 9, 13 and 18 are empty. `Track::new` from the row's
+  values gives the same fixed fields and named strings (text and form) on all 6, but no row is
+  identical once `index_shift` and `unknown2` are masked, because of slots 2 to 4. No gap
+  byte is non-zero.
+- **Ids:** 6 tracks, 7 artists, 4 albums, 1 genre, 0 labels, 6 keys, 8 colours, 5 artwork
+  rows (one per track with artwork), no dangling reference. Rebuilding through
+  find-or-insert in track id order gives every record rekordbox's id, keys included, and the
+  rebuilt `Database` equals the loaded one.
+- **ANLZ:** `track_dat` rebuilds all 6 `.DAT` files byte for byte. All 18 files have the modal
+  PMAI header; every PVBR is the zero 4-byte header and zero 1,604-byte body. `.EXT` is
+  `PPTH PWV3 PCOB PCOB PCO2 PCO2 PQT2 PWV5 PWV4`, with `PSSI` after it in 2 of 6; `.2EX` is
+  `PPTH PWV7 PWV6 PWVC PVDI` in all 6.
+- **Beat grids:** all 6 have one tempo. `BeatGrid::constant_tempo` from the first downbeat,
+  the tempo and the PWV3 length gives the right beat count for all 6, 2 grids exactly, and
+  3,622 of 4,427 beats; no beat is more than 1 ms off.
+- **Other files:**
+  - `USBANLZ/USBMNG.DAT`, 400,058 bytes: an ANLZ-like container, code `PMNG`, big-endian
+    header length 32 and file length, with one `PTBL` section (header 20, 400,026 bytes).
+  - `rekordbox/RBFLTR.DAT`, 232 bytes: code `FMAI`, header length 116, file length, then an
+    `FCND` section (header 20, 28 bytes) and more.
+  - `DJMMYSETTING.DAT` (160 bytes), `MYSETTING.DAT` and `MYSETTING2.DAT` (148 each): a u32
+    string-block length of 0x60 first, as djl-analysis documents.
+  - `djprofile.nxs`: 160 bytes.
+  - `rekordbox/exportLibrary.db`: 118,784 bytes (29 pages of 4,096), not the SQLite magic.
+  - `rekordbox/exportExt.pdb`: 9 tables (types 0–8), 18 pages; types 3, 4 and 7 have 2 pages
+    each (24, 1 and 1 present rows), the others an index page only.

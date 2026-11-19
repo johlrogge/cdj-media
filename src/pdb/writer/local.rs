@@ -16,7 +16,12 @@ const EXPORT: &str = "local-fixtures/real-stick/PIONEER/rekordbox/export.pdb";
 const REQUIRE_ENV: &str = "CDJ_MEDIA_REQUIRE_LOCAL_FIXTURES";
 
 pub(super) fn load() -> Option<Pdb> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(EXPORT);
+    load_from(EXPORT)
+}
+
+/// Decodes the `export.pdb` at `rel` (from the crate root), or skips as [`load`] does.
+pub(super) fn load_from(rel: &str) -> Option<Pdb> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
     if !path.exists() {
         assert!(
             std::env::var(REQUIRE_ENV).as_deref() != Ok("1"),
@@ -56,7 +61,7 @@ fn assert_none(failures: &[String]) {
 }
 
 /// Every row offset of a data page with its slot and presence, in slot order.
-fn slots(page: &Page) -> Vec<(usize, u16, bool)> {
+pub(super) fn slots(page: &Page) -> Vec<(usize, u16, bool)> {
     let PageBody::Data(body) = page.body() else {
         return Vec::new();
     };
@@ -277,7 +282,7 @@ fn real_heap_footprints_match_the_gaps() {
 }
 
 /// The links of a real page, for its rebuild.
-fn links_of(page: &Page) -> PageLinks {
+pub(super) fn links_of(page: &Page) -> PageLinks {
     PageLinks {
         page_index: page.page_index(),
         next_page: page.next_page(),
@@ -286,7 +291,7 @@ fn links_of(page: &Page) -> PageLinks {
 }
 
 /// The transaction fields of a real data page, as stored.
-fn transaction_of(page: &Page) -> Transaction {
+pub(super) fn transaction_of(page: &Page) -> Transaction {
     let PageBody::Data(body) = page.body() else {
         panic!("data page");
     };
