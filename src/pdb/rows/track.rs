@@ -527,11 +527,11 @@ impl Track {
         with_unknown7(unknown7: u16)
     }
 
-    /// Replaces `index_shift` (offset 2).
+    /// Replaces `index_shift` (offset 2); the page writer sets it.
     #[must_use]
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the page writer sets it in slice 7")
+        expect(dead_code, reason = "the page writer sets it from slice 7d on")
     )]
     pub(crate) fn with_index_shift(mut self, index_shift: u16) -> Self {
         self.index_shift = index_shift;
@@ -728,6 +728,23 @@ impl Track {
     /// except for leftover bytes in some gaps before a long-form string.
     pub fn string_gap(&self, slot: TrackString) -> &[u8] {
         &self.strings[slot.slot()].gap
+    }
+
+    /// The row's length as if every string started at a multiple of 4, without other gap
+    /// bytes: what rekordbox's heap layout sizes a track row by (see
+    /// [`ExportRow::heap_footprint`]).
+    ///
+    /// [`ExportRow::heap_footprint`]: super::ExportRow::heap_footprint
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
+    )]
+    pub(super) fn aligned_len(&self) -> usize {
+        self.strings.iter().fold(FIXED_LEN, |len, s| {
+            len.checked_next_multiple_of(4)
+                .unwrap_or(usize::MAX)
+                .saturating_add(s.string.encoded_len())
+        })
     }
 
     /// Slot 0: the ISRC, in the ISRC form, or empty.

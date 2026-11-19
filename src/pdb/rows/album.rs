@@ -87,11 +87,11 @@ impl Album {
         self
     }
 
-    /// Replaces `index_shift` (offset 2).
+    /// Replaces `index_shift` (offset 2); the page writer sets it.
     #[must_use]
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the page writer sets it in slice 7")
+        expect(dead_code, reason = "the page writer sets it from slice 7d on")
     )]
     pub(crate) fn with_index_shift(mut self, index_shift: u16) -> Self {
         self.index_shift = index_shift;
@@ -190,6 +190,18 @@ impl Album {
     /// The bytes between the fixed part and the name; empty or zero in rekordbox's rows.
     pub fn name_gap(&self) -> &[u8] {
         self.tail.gap()
+    }
+
+    /// The row's length as if it were far, with the name right after the fixed part: what
+    /// rekordbox's heap layout sizes an album row by (see [`ExportRow::heap_footprint`]).
+    ///
+    /// [`ExportRow::heap_footprint`]: super::ExportRow::heap_footprint
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
+    )]
+    pub(super) fn far_len(&self) -> usize {
+        MARKER_AT.saturating_add(self.tail.far_len())
     }
 
     /// Decodes an album row.

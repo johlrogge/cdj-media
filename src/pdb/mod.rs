@@ -40,6 +40,14 @@ mod rows;
 mod table;
 #[cfg(test)]
 mod testutil;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Database::to_pdb lays out pages with it in slice 7d"
+    )
+)]
+mod writer;
 
 pub use file::Pdb;
 pub use ids::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, TrackId};

@@ -182,4 +182,47 @@ rekordbox-exported, CDJ-played stick.
   - `PPTH` in each `.DAT` and `.EXT` equals the track's slot 20, on all 826 tracks whose
     analysis files exist.
   - Non-zero gap bytes occur only before slots 17, 19 and 20 (30 rows).
+- **Data page layout** (292 data pages, checked by `src/pdb/writer/local.rs`):
+  - `free_size = len_page − 0x28 − row_index_len(num_row_offsets) − used_size` on all 292,
+    with the partial last row group above.
+  - `index_shift` is 0x20 × the slot on all 1,343 present track, artist and album rows,
+    and the same two bytes hold it in all 608 absent (deleted) rows, whose bytes stay in
+    the heap. Genre, label, key, colour and artwork rows have no such field.
+  - Rows lie in the heap in slot order, the first at offset 0, on every page.
+  - What a row takes in the heap before the next row: genre, label, key, colour and
+    artwork rows their length rounded up to a multiple of 4; artist and album rows their
+    far length (fixed part 12 or 24 plus the name) rounded up, plus 4; **track rows the
+    length they would have if every string started at a multiple of 4 (0x88 plus each
+    string rounded up to 4), rounded up, plus 4**. The last row's padding is inside
+    `used_size`. On pages without deleted rows this is exact for every row whose padding
+    is zero; the others hold leftover bytes of a longer, earlier version of the row,
+    rewritten in place (49 track, 8 artist and 11 album rows on such pages; on pages with
+    deleted rows also 508 track and 2 artist rows). 5 track rows, all on pages with
+    deleted rows, are followed by 4 more zero bytes than this; not explained.
+  - Header fields: `unknown1` (0x00), `unknown2` (0x14) and the two u16s at 0x24 and 0x26
+    are 0 on every data page. `page_flags` is 0x24 on all 109 pages without deleted rows
+    and 0x34 on all 183 with them, so bit 4 means "holds deleted rows". `num_rows` is the
+    number of set `rowpf` bits.
+  - The transaction fields (`transaction_row_count`, `transaction_row_index` at 0x20 and
+    each group's `tranrf`) look like a record of the page's last write: the count is the
+    number of set `tranrf` bits on all but 15 pages, which hold 0x1fff in both u16s and no
+    bits. 229 pages flag one row, 12 two. 33 pages were written in one go: the count is
+    every row, the index 0 and each `tranrf` equals `rowpf` (the colour page, for one).
+    `sequence` differs on every page and is not derived from the rows.
+  - **Rebuilding pages:** from its typed rows (with `index_shift` zeroed), its
+    `page_index`, `next_page` and `sequence`, and its transaction fields, the page writer
+    gives back 79 of the 91 typed pages without deleted rows byte for byte, 24 of them
+    with whole-page transaction values. The other 12 hold rows rewritten in place. Not
+    rebuilt: 174 pages with deleted rows (168 of the 178 track pages) and 27 pages of
+    untyped tables. Per table, identical of typed pages without deleted rows: tracks 1 of
+    10, genres 6 of 6, artists 8 of 9, albums 17 of 19, labels 5 of 5, keys 11 of 11,
+    colours 1 of 1, artwork 30 of 30.
+  - **Page breaks:** a page ends when the next row, its footprint and its row index entry
+    (2 bytes, or 6 for a new group) no longer fit; a page may end with 0 bytes free (5
+    artwork pages of 106 rows). No row-count limit shows: pages hold up to 116 artist,
+    106 artwork and 284 playlist-entry rows. Of the breaks after which the next page's
+    first row is present, 99 are full pages (90 of them track pages) and 75 left room for
+    that row; on 72 of those 75 the next page has a higher `sequence`, which fits rows
+    added in a later update rather than a layout rule. Packing a whole table therefore gives fewer pages than the
+    stick has (artwork 8 against 31, tracks 92 against 178).
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).

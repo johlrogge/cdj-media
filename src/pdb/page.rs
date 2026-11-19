@@ -20,6 +20,10 @@ const FULL_GROUP_LEN: usize = 2 * ROWS_PER_GROUP + GROUP_FLAGS_LEN;
 pub(crate) const NEXT_PAGE_AT: u64 = 0x0c;
 /// Offset of the packed `num_row_offsets` and `num_rows` in the common page header.
 const ROW_COUNTS_AT: u64 = 0x18;
+/// Largest `num_row_offsets`: 13 bits.
+const MAX_ROW_OFFSETS: u16 = 0x1fff;
+/// Largest `num_rows`: 11 bits.
+const MAX_ROWS: u16 = 0x7ff;
 
 /// One page of a table, as stored.
 ///
@@ -124,6 +128,22 @@ pub struct RowGroup {
     tranrf: u16,
 }
 
+/// The header fields of a built data page that its body does not determine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the page writer builds pages from slice 7d on")
+)]
+pub(crate) struct DataHeader {
+    pub(crate) page_index: u32,
+    pub(crate) page_type: u32,
+    pub(crate) next_page: u32,
+    pub(crate) sequence: u32,
+    pub(crate) page_flags: u8,
+    pub(crate) free_size: u16,
+    pub(crate) used_size: u16,
+}
+
 /// A present row of a data page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -135,6 +155,34 @@ pub struct RawRow<'a> {
 }
 
 impl Page {
+    /// A data page from its header fields and body. `unknown1` and `unknown2` are 0, as in
+    /// every real page; `num_row_offsets` counts the body's offsets and `num_rows` the set
+    /// `rowpf` bits, as on every real page. Counts that do not fit their fields saturate
+    /// here and fail to encode.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer builds pages from slice 7d on")
+    )]
+    pub(crate) fn data(header: DataHeader, body: DataBody) -> Self {
+        let offsets: usize = body.row_groups.iter().map(|g| g.offsets.len()).sum();
+        let present: u32 = body.row_groups.iter().map(|g| g.rowpf.count_ones()).sum();
+        Self {
+            unknown1: 0,
+            page_index: header.page_index,
+            page_type: header.page_type,
+            next_page: header.next_page,
+            sequence: header.sequence,
+            unknown2: 0,
+            num_row_offsets: u16::try_from(offsets).unwrap_or(u16::MAX),
+            num_rows: u16::try_from(present).unwrap_or(u16::MAX),
+            page_flags: header.page_flags,
+            free_size: header.free_size,
+            used_size: header.used_size,
+            body: PageBody::Data(body),
+            file_offset: 0,
+        }
+    }
+
     /// The first `u32` of the header, 0 in real files.
     pub fn unknown1(&self) -> u32 {
         self.unknown1
@@ -229,7 +277,9 @@ impl Page {
     ///
     /// # Errors
     ///
-    /// None yet; the result leaves room for the checks a page built from scratch needs.
+    /// [`EncodeError::ValueOutOfRange`] when `num_row_offsets` or `num_rows` does not fit
+    /// its packed field (13 and 11 bits). A decoded page always fits; only a built page can
+    /// hold that many rows.
     pub fn to_bytes(&self) -> Result<Vec<u8>, EncodeError> {
         let mut w = Writer::new();
         self.encode(&mut w)?;
@@ -278,8 +328,19 @@ impl Page {
         })
     }
 
-    /// Writes the page.
+    /// Writes the page, or nothing when `num_row_offsets` or `num_rows` does not fit its
+    /// packed field ([`EncodeError::ValueOutOfRange`]), which only a built page can hold.
     pub(crate) fn encode(&self, w: &mut Writer) -> Result<(), EncodeError> {
+        if self.num_row_offsets > MAX_ROW_OFFSETS {
+            return Err(EncodeError::ValueOutOfRange {
+                context: "pdb page num_row_offsets",
+            });
+        }
+        if self.num_rows > MAX_ROWS {
+            return Err(EncodeError::ValueOutOfRange {
+                context: "pdb page num_rows",
+            });
+        }
         w.u32_le(self.unknown1);
         w.u32_le(self.page_index);
         w.u32_le(self.page_type);
@@ -300,6 +361,28 @@ impl Page {
 }
 
 impl DataBody {
+    /// A data page body; `unknown3` and `unknown4` are 0, as in every real page. `heap` is
+    /// the whole heap, up to the row index.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer builds pages from slice 7d on")
+    )]
+    pub(crate) fn new(
+        transaction_row_count: u16,
+        transaction_row_index: u16,
+        heap: Vec<u8>,
+        row_groups: Vec<RowGroup>,
+    ) -> Self {
+        Self {
+            transaction_row_count,
+            transaction_row_index,
+            unknown3: 0,
+            unknown4: 0,
+            heap,
+            row_groups,
+        }
+    }
+
     /// The `transaction_row_count` field at 0x20.
     pub fn transaction_row_count(&self) -> u16 {
         self.transaction_row_count
@@ -411,7 +494,7 @@ impl DataBody {
 
 /// Length of the row index for `count` row offsets: 36 bytes for each full group of 16, and
 /// for the last group 2 bytes per offset plus `rowpf` and `tranrf`.
-fn row_index_len(count: usize) -> usize {
+pub(crate) fn row_index_len(count: usize) -> usize {
     let full = count / ROWS_PER_GROUP;
     let rest = count % ROWS_PER_GROUP;
     let last = if rest == 0 {
@@ -430,6 +513,20 @@ impl IndexBody {
 }
 
 impl RowGroup {
+    /// A row group; the caller keeps to at most 16 offsets, fewer only in a page's last
+    /// group.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer builds pages from slice 7d on")
+    )]
+    pub(crate) fn new(offsets: Vec<u16>, rowpf: u16, tranrf: u16) -> Self {
+        Self {
+            offsets,
+            rowpf,
+            tranrf,
+        }
+    }
+
     /// The row offsets, row 0 of the group first, relative to the heap start: 16, or fewer
     /// in a page's last group.
     pub fn offsets(&self) -> &[u16] {
@@ -607,6 +704,33 @@ mod tests {
                 "{offset}"
             );
         }
+    }
+
+    #[test]
+    fn row_offsets_that_do_not_fit_13_bits_fail_to_encode() {
+        let header = DataHeader {
+            page_index: 1,
+            page_type: 2,
+            next_page: 3,
+            sequence: 4,
+            page_flags: 0x24,
+            free_size: 0,
+            used_size: 0,
+        };
+        let groups = |offsets: usize| {
+            let mut groups = vec![RowGroup::new(vec![0; 16], 0, 0); offsets / 16];
+            groups.push(RowGroup::new(vec![0; offsets % 16], 0, 0));
+            groups
+        };
+        let page = |offsets| Page::data(header, DataBody::new(0, 0, Vec::new(), groups(offsets)));
+        assert_eq!(page(0x1fff).num_row_offsets(), 0x1fff);
+        assert!(page(0x1fff).to_bytes().is_ok());
+        assert_eq!(
+            page(0x2000).to_bytes(),
+            Err(EncodeError::ValueOutOfRange {
+                context: "pdb page num_row_offsets"
+            })
+        );
     }
 
     #[test]
