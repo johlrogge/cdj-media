@@ -11,17 +11,9 @@ fn date() -> ExportDate {
     ExportDate::new(2026, 11, 19).unwrap()
 }
 
-/// The file at `path` of `export`.
-fn file<'a>(export: &'a Export, path: &str) -> Option<&'a [u8]> {
-    export
-        .files()
-        .find(|(p, _)| p.as_str() == path)
-        .map(|(_, bytes)| bytes)
-}
-
 /// The export's `export.pdb`, loaded.
 fn database(export: &Export) -> Database {
-    let bytes = file(export, EXPORT_PDB).expect("an export.pdb");
+    let bytes = export.file(&export_pdb_path()).expect("an export.pdb");
     Database::from_pdb(&Pdb::from_bytes(bytes).expect("decodes")).expect("loads")
 }
 
@@ -55,6 +47,27 @@ fn an_empty_builder_gives_an_export_pdb_of_an_empty_database() {
     assert_eq!(export.audio_destinations().count(), 0);
 }
 
+#[test]
+fn file_gives_the_bytes_at_a_path() {
+    let export = small_export();
+    for (path, bytes) in export.files() {
+        assert_eq!(export.file(path), Some(bytes), "{path}");
+    }
+    let absent = AnlzPath::for_track(TrackId::new(2).unwrap()).dat();
+    assert_eq!(export.file(&absent), None);
+}
+
+/// `build` leaves the builder as it was, so a caller can go on, or retry.
+#[test]
+fn build_leaves_the_builder_usable() {
+    let mut builder = ExportBuilder::new(date());
+    let first = builder.build().unwrap();
+    let id = builder.add_track(track("A", "B", "1.aiff")).unwrap();
+    let second = builder.build().unwrap();
+    assert_eq!(first.files().count(), 1);
+    assert!(second.file(&AnlzPath::for_track(id).dat()).is_some());
+}
+
 /// A track with only what a file needs.
 fn track(artist: &str, album: &str, file_name: &str) -> NewTrack {
     NewTrack {
@@ -74,7 +87,7 @@ fn track(artist: &str, album: &str, file_name: &str) -> NewTrack {
 /// The `.DAT` of track `id` in `export`, decoded.
 fn dat(export: &Export, id: TrackId) -> AnlzFile {
     let path = AnlzPath::for_track(id).dat();
-    let bytes = file(export, path.as_str()).expect("a .DAT");
+    let bytes = export.file(&path).expect("a .DAT");
     AnlzFile::from_bytes(bytes).expect("decodes")
 }
 
@@ -281,17 +294,19 @@ fn cues_keep_the_callers_order() {
     assert_eq!(file.memory_cues(), Some(&CueList::memory(memory)));
 }
 
-/// `bad` is refused with `ValueOutOfRange { context }`, and the builder is unchanged: it
-/// builds the same export, and the next track gets the id, names and path it would have.
+/// `bad` is refused with `ValueOutOfRange { context }`: see [`assert_refused_with`].
 fn assert_refused(bad: NewTrack, context: &'static str) {
+    assert_refused_with(bad, EncodeError::ValueOutOfRange { context });
+}
+
+/// `bad` is refused with `error`, and the builder is unchanged: it builds the same export,
+/// and the next track gets the id, names and path it would have.
+fn assert_refused_with(bad: NewTrack, error: EncodeError) {
+    let context = format!("{error:?}");
     let mut builder = ExportBuilder::new(date());
     builder.add_track(track("A", "B", "1.aiff")).unwrap();
     let before = builder.clone();
-    assert_eq!(
-        builder.add_track(bad),
-        Err(EncodeError::ValueOutOfRange { context }),
-        "{context}"
-    );
+    assert_eq!(builder.add_track(bad), Err(error), "{context}");
     // Not `assert_eq!`: the exports' bytes would flood the output.
     let unchanged = builder.clone().build().unwrap() == before.clone().build().unwrap();
     assert!(unchanged, "{context}: the export changed");
@@ -391,6 +406,118 @@ fn row_and_dat_errors_leave_the_builder_unchanged() {
     assert_refused(NewTrack { grid, ..bad() }, "PQTZ tempo");
 }
 
+/// A colour must be one of the database's colour rows, or `build` would refuse it as a
+/// dangling reference.
+#[test]
+fn a_colour_the_database_has_no_row_for_is_refused() {
+    for color in [9, 255] {
+        let color = ColorId::new(color);
+        assert_refused(NewTrack { color, ..bad() }, "track color");
+    }
+}
+
+/// The error `Database::to_pdb` gives for a row that doesn't fit an empty page.
+fn heap_overflow() -> EncodeError {
+    EncodeError::LengthOverflow {
+        context: "pdb page heap",
+    }
+}
+
+/// A text whose UTF-16 form, 4,200 bytes, is longer than a page.
+fn too_long() -> String {
+    "ö".repeat(2_100)
+}
+
+/// A row that doesn't fit an empty page is refused by `add_track`, with the error
+/// `to_pdb` would give, not later by `build`.
+#[test]
+fn a_row_too_big_for_a_page_is_refused() {
+    let mut db = Database::new();
+    db.add_track(TrackFields {
+        comment: too_long(),
+        ..TrackFields::default()
+    })
+    .unwrap();
+    assert_eq!(
+        db.to_pdb().map(drop),
+        Err(heap_overflow()),
+        "to_pdb's error"
+    );
+    let mut db = Database::new();
+    db.find_or_insert_artist(&too_long());
+    assert_eq!(
+        db.to_pdb().map(drop),
+        Err(heap_overflow()),
+        "to_pdb's error"
+    );
+
+    assert_refused_with(
+        NewTrack {
+            comment: too_long(),
+            ..bad()
+        },
+        heap_overflow(),
+    );
+    let names: [fn(&mut NewTrack) -> &mut String; 9] = [
+        |t| &mut t.artist,
+        |t| &mut t.album,
+        |t| &mut t.album_artist,
+        |t| &mut t.composer,
+        |t| &mut t.remixer,
+        |t| &mut t.original_artist,
+        |t| &mut t.genre,
+        |t| &mut t.label,
+        |t| &mut t.key,
+    ];
+    for name in names {
+        let mut track = bad();
+        *name(&mut track) = too_long();
+        assert_refused_with(track, heap_overflow());
+    }
+}
+
+#[test]
+fn a_cue_of_another_type_is_refused() {
+    let other = CueSpan::Other {
+        cue_type: 3,
+        time: 1,
+        loop_time: 2,
+    };
+    let hot_cues = vec![(HotCueSlot::A, other)];
+    assert_refused(NewTrack { hot_cues, ..bad() }, "cue type");
+    let memory_cues = vec![point(1), other];
+    assert_refused(
+        NewTrack {
+            memory_cues,
+            ..bad()
+        },
+        "cue type",
+    );
+}
+
+/// The row's tempo is the constant grid's, even when the track is too short for a beat.
+#[test]
+fn a_constant_grid_without_beats_keeps_its_tempo() {
+    let mut builder = ExportBuilder::new(date());
+    let id = builder
+        .add_track(NewTrack {
+            duration: Millis::new(50),
+            grid: Grid::Constant {
+                first_beat: Millis::new(100),
+                tempo: Bpm::from_centi(12_800),
+            },
+            ..track("A", "B", "c.aiff")
+        })
+        .unwrap();
+    let export = builder.build().unwrap();
+    assert_eq!(
+        dat(&export, id).beat_grid().map(|g| g.beats().len()),
+        Some(0)
+    );
+    let db = database(&export);
+    assert_eq!(db.track(id).unwrap().tempo(), Bpm::from_centi(12_800));
+}
+
 /// The start of a JPEG file: SOI, then an APP0 marker.
 const JPEG: [u8; 6] = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
 
@@ -429,7 +556,7 @@ fn each_track_gets_its_own_artwork_row_and_file() {
         let id = ArtworkId::new(id).unwrap();
         let path = ArtworkPath::for_artwork(id);
         assert_eq!(db.artwork(id).unwrap().path(), path.as_str());
-        assert_eq!(file(&export, path.as_str()), Some(bytes.as_slice()));
+        assert_eq!(export.file(&path), Some(bytes.as_slice()));
     }
     assert_eq!(export.files().count(), 1 + 4 + 3);
 }
@@ -454,9 +581,9 @@ fn playlists_and_folders_hold_tracks_in_the_order_added() {
     let two = builder.add_track(track("A", "B", "2.aiff")).unwrap();
     let folder = builder.add_folder("Folder", None).unwrap();
     let playlist = builder.add_playlist("Set", Some(folder)).unwrap();
-    builder.add_to_playlist(playlist, two);
-    builder.add_to_playlist(playlist, one);
-    builder.add_to_playlist(playlist, two);
+    for track in [two, one, two] {
+        builder.add_to_playlist(playlist, track).unwrap();
+    }
     assert_eq!(
         builder.add_playlist("Inside a playlist", Some(playlist)),
         Err(EncodeError::ValueOutOfRange {
@@ -479,14 +606,58 @@ fn playlists_and_folders_hold_tracks_in_the_order_added() {
     assert_eq!(tracks, [two, one, two]);
 }
 
+/// `add_to_playlist` refuses what `build` would: an entry naming a track or playlist the
+/// export doesn't have, with the dangling reference `to_pdb` would report, and an entry in a
+/// folder, which holds no tracks. The playlist is unchanged.
 #[test]
-fn a_dangling_playlist_reference_is_refused_at_build() {
-    let mut builder = ExportBuilder::new(date());
-    let playlist = builder.add_playlist("Set", None).unwrap();
-    builder.add_to_playlist(playlist, TrackId::new(9).unwrap());
-    let err = builder.build().unwrap_err();
-    assert!(matches!(err, EncodeError::DanglingReference(_)), "{err:?}");
+fn add_to_playlist_refuses_what_the_export_does_not_have() {
+    use crate::pdb::model::{Dangling, RecordId, Reference};
 
+    let mut builder = ExportBuilder::new(date());
+    let one = builder.add_track(track("A", "B", "1.aiff")).unwrap();
+    let folder = builder.add_folder("Folder", None).unwrap();
+    let playlist = builder.add_playlist("Set", Some(folder)).unwrap();
+    builder.add_to_playlist(playlist, one).unwrap();
+
+    let missing_track = TrackId::new(9).unwrap();
+    let dangling = Dangling {
+        from: RecordId::PlaylistEntry {
+            playlist: Some(playlist),
+            index: 2,
+        },
+        field: Reference::PlaylistEntryTrack,
+        id: Some(RecordId::Track(missing_track)),
+    };
+    assert_eq!(
+        builder.add_to_playlist(playlist, missing_track),
+        Err(EncodeError::DanglingReference(dangling))
+    );
+    let missing_playlist = PlaylistId::new(7).unwrap();
+    let dangling = Dangling {
+        from: RecordId::PlaylistEntry {
+            playlist: Some(missing_playlist),
+            index: 1,
+        },
+        field: Reference::PlaylistEntryPlaylist,
+        id: Some(RecordId::Playlist(missing_playlist)),
+    };
+    assert_eq!(
+        builder.add_to_playlist(missing_playlist, one),
+        Err(EncodeError::DanglingReference(dangling))
+    );
+    assert_eq!(
+        builder.add_to_playlist(folder, one),
+        Err(EncodeError::ValueOutOfRange {
+            context: "pdb playlist entry playlist_id"
+        })
+    );
+    let db = database(&builder.build().unwrap());
+    assert_eq!(db.playlist_tracks(playlist).collect::<Vec<_>>(), [one]);
+    assert_eq!(db.playlist_tracks(folder).count(), 0);
+}
+
+#[test]
+fn a_dangling_playlist_parent_is_refused_at_build() {
     let mut builder = ExportBuilder::new(date());
     builder
         .add_playlist("Set", Some(PlaylistId::new(7).unwrap()))
@@ -507,11 +678,6 @@ impl TempRoot {
         std::fs::create_dir_all(&dir).expect("create a temporary directory");
         Self(dir)
     }
-
-    /// Where `path` goes under this root.
-    fn file(&self, path: &StickPath) -> std::path::PathBuf {
-        self.0.join(path.as_str().trim_start_matches('/'))
-    }
 }
 
 impl Drop for TempRoot {
@@ -530,7 +696,7 @@ fn small_export() -> Export {
         })
         .unwrap();
     let playlist = builder.add_playlist("Set", None).unwrap();
-    builder.add_to_playlist(playlist, id);
+    builder.add_to_playlist(playlist, id).unwrap();
     builder.build().unwrap()
 }
 
@@ -541,7 +707,7 @@ fn write_to_writes_every_file_under_the_root() {
     export.write_to(&root.0).unwrap();
     let mut written = 0;
     for (path, bytes) in export.files() {
-        assert_eq!(std::fs::read(root.file(path)).unwrap(), bytes, "{path}");
+        assert_eq!(std::fs::read(path.under(&root.0)).unwrap(), bytes, "{path}");
         written += 1;
     }
     assert_eq!(written, 3);
@@ -552,7 +718,7 @@ fn write_to_refuses_and_overwrites_nothing_when_a_file_exists() {
     let root = TempRoot::new("refuses");
     let export = small_export();
     let pdb = export_pdb_path();
-    let existing = root.file(&pdb);
+    let existing = pdb.under(&root.0);
     std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
     std::fs::write(&existing, b"old").unwrap();
 
@@ -563,7 +729,7 @@ fn write_to_refuses_and_overwrites_nothing_when_a_file_exists() {
     assert_eq!(io.kind(), std::io::ErrorKind::AlreadyExists);
     assert_eq!(std::fs::read(&existing).unwrap(), b"old");
     for (path, _) in export.files().filter(|(p, _)| **p != pdb) {
-        assert!(!root.file(path).exists(), "{path} was written");
+        assert!(!path.under(&root.0).exists(), "{path} was written");
     }
 }
 

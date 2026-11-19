@@ -120,7 +120,18 @@ problem is reported where it first shows:
   - a loop whose end ≤ its start;
   - artwork that isn't JPEG;
   - a `Constant` grid with tempo 0;
+  - a colour the database has no row for;
+  - a cue type other than a point or a loop;
   - a duration of 65,536 s or more, which overflows the row's seconds field.
+- **`LengthOverflow`** for a track row, or a new artist, album, genre, label or key row, that
+  can't fit on an empty page. The check is `Database::check_fits`, which uses the writer's
+  own packing rule.
+- **The rule:** nothing fails at `build` that `add_track` could have caught.
+- **`add_to_playlist`:**
+  - an unknown track or playlist gives `DanglingReference`;
+  - a folder gives `ValueOutOfRange`.
+- **Known gaps:** `add_playlist` and `add_folder` don't check the parent or the name's page
+  fit eagerly; `build` refuses both.
 - **Row and `.DAT` errors** come from `Database::add_track` and `track_dat`.
 - **`build()`** runs `to_pdb`, which refuses dangling playlist references
   (`DanglingReference`) and playlists whose parent isn't a folder.
@@ -131,11 +142,18 @@ problem is reported where it first shows:
     .add_track(NewTrack) -> Result<TrackId, EncodeError>
     .add_playlist(name, Option<PlaylistId>) -> Result<PlaylistId, EncodeError>
     .add_folder(name, Option<PlaylistId>) -> Result<PlaylistId, EncodeError>
-    .add_to_playlist(PlaylistId, TrackId)
-    .build(self) -> Result<Export, EncodeError>
+    .add_to_playlist(PlaylistId, TrackId) -> Result<(), EncodeError>
+    .build(&self) -> Result<Export, EncodeError>
     Export::files() -> impl Iterator<Item = (&StickPath, &[u8])>
+    Export::file(&StickPath) -> Option<&[u8]>
     Export::audio_destinations() -> impl Iterator<Item = (TrackId, &ContentPath)>
     Export::write_to(&self, root: &Path) -> Result<(), Error>
+    StickPath::under(&self, root: &Path) -> PathBuf   // where to copy audio
+    layout::export_pdb_path() -> StickPath
+
+`build` borrows the builder, so a caller can fix its input after a failed build.
+`pdb::model::Track::to_fields` is public, so a loaded track can be compared field by field.
+This reverses ADR-016's note that it stays crate-private.
 
 `NewTrack` has public fields and `Default`, like `TrackFields`:
 - **tags:** title, artist, album, album artist, composer, remixer, original artist, lyricist,

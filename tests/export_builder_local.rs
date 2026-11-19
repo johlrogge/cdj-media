@@ -16,10 +16,10 @@ use std::collections::BTreeMap;
 
 use cdj_media::anlz::{AnlzFile, CueSpan, HotCueSlot};
 use cdj_media::encoding::Millis;
-use cdj_media::export::{AudioFormat, Export, ExportBuilder, ExportDate, Grid, NewTrack, Waveform};
-use cdj_media::layout::AnlzPath;
+use cdj_media::export::{AudioFormat, ExportBuilder, ExportDate, Grid, NewTrack, Waveform};
+use cdj_media::layout::{AnlzPath, export_pdb_path};
 use cdj_media::pdb::model::Track;
-use cdj_media::pdb::{Database, FileType, Pdb};
+use cdj_media::pdb::{Database, FileType, Pdb, TrackFields};
 
 const ROOT: &str = "rekordbox-hw1";
 
@@ -107,15 +107,19 @@ fn new_track(db: &Database, t: &Track, dat: &AnlzFile) -> NewTrack {
 macro_rules! differing_fields {
     ($a:expr, $b:expr, $out:expr; $($field:ident),* $(,)?) => {
         $(
-            if $a.$field() != $b.$field() {
+            if $a.$field != $b.$field {
                 *$out.entry(stringify!($field)).or_insert(0usize) += 1;
             }
         )*
+        // Exhaustive: a field of `TrackFields` missing from the list doesn't compile.
+        let TrackFields { $($field: _),* } = &$a;
     };
 }
 
 /// The fields of the tracks that differ between `rebuilt` and `fixture`, by name, with the
-/// number of tracks; a track one of them lacks counts as `missing track`.
+/// number of tracks; a track one of them lacks counts as `missing track`. Each track is
+/// compared whole, as the fields of its row, once the documented difference, the analysis
+/// path, is counted and taken out; the names only say where a difference is.
 fn track_differences(rebuilt: &Database, fixture: &Database) -> BTreeMap<&'static str, usize> {
     let mut out = BTreeMap::new();
     for f in fixture.tracks() {
@@ -123,14 +127,21 @@ fn track_differences(rebuilt: &Database, fixture: &Database) -> BTreeMap<&'stati
             *out.entry("missing track").or_insert(0) += 1;
             continue;
         };
-        differing_fields!(r, f, out;
-            title, artist_id, composer_id, original_artist_id, remixer_id, album_id,
-            genre_id, label_id, key_id, color_id, artwork_id, file_path, filename,
-            analysis_path, comment, mix_name, lyricist, message, isrc, date_added,
-            release_date, analysis_date, publish_track_info, autoload_hot_cues, tempo,
-            duration, bitrate, sample_rate, sample_depth, file_size, track_number,
-            disc_number, year, rating, play_count, file_type,
-        );
+        let (r, mut f) = (r.to_fields(), f.to_fields());
+        if r.analysis_path != f.analysis_path {
+            *out.entry("analysis_path").or_insert(0) += 1;
+            f.analysis_path.clone_from(&r.analysis_path);
+        }
+        if r != f {
+            differing_fields!(r, f, out;
+                sample_rate, composer_id, file_size, artwork_id, key_id, original_artist_id,
+                label_id, remixer_id, bitrate, track_number, tempo, genre_id, album_id,
+                artist_id, disc_number, play_count, year, sample_depth, duration, color_id,
+                rating, file_type, isrc, lyricist, message, publish_track_info,
+                autoload_hot_cues, date_added, release_date, mix_name, analysis_path,
+                analysis_date, comment, title, filename, file_path,
+            );
+        }
     }
     let extra = rebuilt
         .tracks()
@@ -165,14 +176,6 @@ fn table_differences(rebuilt: &Database, fixture: &Database) -> Vec<&'static str
     });
     check("playlist tracks", entries);
     out
-}
-
-/// The file at `path` of `export`.
-fn file<'a>(export: &'a Export, path: &str) -> Option<&'a [u8]> {
-    export
-        .files()
-        .find(|(p, _)| p.as_str() == path)
-        .map(|(_, bytes)| bytes)
 }
 
 /// ADR-018's acceptance test:
@@ -211,7 +214,9 @@ fn export_builder_rebuilds_the_fresh_export() {
         };
         assert_eq!(id, Ok(playlist.id()), "the playlist gets rekordbox's id");
         for track in fixture.playlist_tracks(playlist.id()) {
-            builder.add_to_playlist(playlist.id(), track);
+            builder
+                .add_to_playlist(playlist.id(), track)
+                .expect("the playlist takes the track");
         }
     }
     let export = builder.build().expect("builds");
@@ -219,11 +224,10 @@ fn export_builder_rebuilds_the_fresh_export() {
     let identical = dats
         .iter()
         .filter(|(id, bytes)| {
-            let path = AnlzPath::for_track(*id).dat();
-            file(&export, path.as_str()) == Some(bytes.as_slice())
+            export.file(&AnlzPath::for_track(*id).dat()) == Some(bytes.as_slice())
         })
         .count();
-    let rebuilt = load(file(&export, "/PIONEER/rekordbox/export.pdb").expect("export.pdb"));
+    let rebuilt = load(export.file(&export_pdb_path()).expect("export.pdb"));
     let tracks = track_differences(&rebuilt, &fixture);
     let tables = table_differences(&rebuilt, &fixture);
     eprintln!(

@@ -356,6 +356,17 @@ impl Database {
         next_id(&self.artworks)
     }
 
+    /// Checks that `row` fits an empty page of the file [`to_pdb`](Self::to_pdb) writes,
+    /// with the page writer's own rule, so a caller can refuse a record before adding it.
+    ///
+    /// # Errors
+    ///
+    /// The error `to_pdb` would give for the row: [`EncodeError::LengthOverflow`]
+    /// (`"pdb page heap"`) when it doesn't fit, and the row's encoding errors.
+    pub(crate) fn check_fits(row: &ExportRow) -> Result<(), EncodeError> {
+        writer::pack(PAGE_LEN, std::slice::from_ref(row)).map(drop)
+    }
+
     /// Writes the database as a fresh `export.pdb` with 4,096-byte pages, as rekordbox lays
     /// one out (ADR-012): every record lowered to its typed row with the ids as they are,
     /// each table in id order, colours included, so renamed colours keep their names. A
