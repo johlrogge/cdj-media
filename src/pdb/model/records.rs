@@ -198,7 +198,9 @@ impl Track {
 
     /// The track's values as the fields of a track row, the ids unchanged: the lowering of
     /// [`Database::to_pdb`](super::Database::to_pdb). `None` text is empty.
-    pub(crate) fn to_fields(&self) -> TrackFields {
+    ///
+    /// Comparing two tracks' fields compares them whole, as rows, ids included.
+    pub fn to_fields(&self) -> TrackFields {
         let text = |value: &Option<String>| value.clone().unwrap_or_default();
         TrackFields {
             sample_rate: self.sample_rate,

@@ -1,6 +1,7 @@
 //! [`StickPath`]: a validated absolute path on the stick.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error as ThisError;
 
@@ -125,6 +126,14 @@ impl StickPath {
         &self.0
     }
 
+    /// Where the path is on a file system whose stick is mounted at `root`: `root` joined
+    /// with each component in turn.
+    pub fn under(&self, root: &Path) -> PathBuf {
+        let mut path = root.to_path_buf();
+        path.extend(self.0.split('/').skip(1));
+        path
+    }
+
     /// The last component: the file's name.
     pub fn file_name(&self) -> &str {
         // A stick path has at least one non-empty component after its leading `/`.
@@ -231,6 +240,20 @@ mod tests {
             parse(&format!("/{}/\u{1f3b5}", "ö".repeat(254))),
             Err(PathError::PathTooLong { units: 258 })
         );
+    }
+
+    #[test]
+    fn under_places_the_path_below_a_root() {
+        use std::path::{Path, PathBuf};
+
+        let path = StickPath::parse("/Contents/Björk/01 a b.mp3").unwrap();
+        assert_eq!(
+            path.under(Path::new("/mnt/stick")),
+            PathBuf::from("/mnt/stick/Contents/Björk/01 a b.mp3")
+        );
+        let relative = Path::new("stick");
+        let expected = relative.join("Contents").join("Björk").join("01 a b.mp3");
+        assert_eq!(path.under(relative), expected);
     }
 
     #[test]

@@ -343,6 +343,30 @@ impl Database {
         Ok(id)
     }
 
+    /// The id the next [`add_track`](Self::add_track) allocates (ADR-016), so a caller can
+    /// derive paths from it before the insert. Peeking changes nothing.
+    pub(crate) fn next_track_id(&self) -> TrackId {
+        next_id(&self.tracks)
+    }
+
+    /// The id the next artwork that [`find_or_insert_artwork`](Self::find_or_insert_artwork)
+    /// inserts gets (ADR-016); a path the database already has keeps its id. Peeking changes
+    /// nothing.
+    pub(crate) fn next_artwork_id(&self) -> ArtworkId {
+        next_id(&self.artworks)
+    }
+
+    /// Checks that `row` fits an empty page of the file [`to_pdb`](Self::to_pdb) writes,
+    /// with the page writer's own rule, so a caller can refuse a record before adding it.
+    ///
+    /// # Errors
+    ///
+    /// The error `to_pdb` would give for the row: [`EncodeError::LengthOverflow`]
+    /// (`"pdb page heap"`) when it doesn't fit, and the row's encoding errors.
+    pub(crate) fn check_fits(row: &ExportRow) -> Result<(), EncodeError> {
+        writer::pack(PAGE_LEN, std::slice::from_ref(row)).map(drop)
+    }
+
     /// Writes the database as a fresh `export.pdb` with 4,096-byte pages, as rekordbox lays
     /// one out (ADR-012): every record lowered to its typed row with the ids as they are,
     /// each table in id order, colours included, so renamed colours keep their names. A

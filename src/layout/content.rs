@@ -68,6 +68,12 @@ impl ContentPath {
     pub fn file_name(&self) -> &str {
         self.0.file_name()
     }
+
+    /// Whether the file name has an extension, as [`for_track`](Self::for_track) keeps one:
+    /// 1 to 7 UTF-16 units after the last dot that isn't the first character.
+    pub(crate) fn has_extension(&self) -> bool {
+        extension_at(self.file_name()).is_some()
+    }
 }
 
 impl From<ContentPath> for StickPath {
@@ -81,7 +87,7 @@ impl From<ContentPath> for StickPath {
 /// file names to this length (277 paths have a component of exactly 48). A whole content
 /// path is then at most 10 + 3 × 48 + 2 = 156 units, well within
 /// [`MAX_PATH_UNITS`](super::MAX_PATH_UNITS).
-const MAX_UNITS: usize = 48;
+pub(super) const MAX_UNITS: usize = 48;
 
 /// The artist directory of a track whose artist sanitises to nothing.
 const UNKNOWN_ARTIST: &str = "UnknownArtist";
@@ -123,7 +129,7 @@ const MAX_EXTENSION_UNITS: usize = 7;
 
 /// Where `name`'s extension starts (its dot), if it has one: a dot that is not the first
 /// character, followed by 1 to [`MAX_EXTENSION_UNITS`] units.
-fn extension_at(name: &str) -> Option<usize> {
+pub(super) fn extension_at(name: &str) -> Option<usize> {
     let at = name.rfind('.').filter(|&at| at > 0)?;
     let units = utf16_len(&name[at + 1..]);
     (1..=MAX_EXTENSION_UNITS).contains(&units).then_some(at)
@@ -137,7 +143,7 @@ fn replace_forbidden(name: &str) -> String {
 }
 
 /// The longest prefix of `s` that is at most `max` UTF-16 code units long.
-fn cut(s: &str, max: usize) -> &str {
+pub(super) fn cut(s: &str, max: usize) -> &str {
     let mut units = 0;
     for (at, c) in s.char_indices() {
         units += c.len_utf16();
