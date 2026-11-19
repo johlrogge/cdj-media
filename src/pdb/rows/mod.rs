@@ -85,6 +85,82 @@ impl ExportRow {
             Self::Artwork(row) => row.encode(),
         }
     }
+
+    /// The row's `index_shift`, for the rows that have one: tracks, artists and albums.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
+    )]
+    pub(crate) fn index_shift(&self) -> Option<u16> {
+        match self {
+            Self::Track(row) => Some(row.index_shift()),
+            Self::Artist(row) => Some(row.index_shift()),
+            Self::Album(row) => Some(row.index_shift()),
+            Self::Genre(_) | Self::Label(_) | Self::Key(_) | Self::Color(_) | Self::Artwork(_) => {
+                None
+            }
+        }
+    }
+
+    /// The row with `index_shift` replaced; rows without one are returned unchanged.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
+    )]
+    pub(crate) fn with_index_shift(self, index_shift: u16) -> Self {
+        match self {
+            Self::Track(row) => Self::Track(row.with_index_shift(index_shift)),
+            Self::Artist(row) => Self::Artist(row.with_index_shift(index_shift)),
+            Self::Album(row) => Self::Album(row.with_index_shift(index_shift)),
+            Self::Genre(_) | Self::Label(_) | Self::Key(_) | Self::Color(_) | Self::Artwork(_) => {
+                self
+            }
+        }
+    }
+
+    /// How many heap bytes the row takes in a page laid out as rekordbox does: the row and
+    /// the zero padding before the next row, which starts at a multiple of 4.
+    ///
+    /// - Genre, label, key, colour and artwork rows: the row's length rounded up to a
+    ///   multiple of 4.
+    /// - Artist and album rows: the length the row would have in the far layout, rounded up
+    ///   to a multiple of 4, plus 4.
+    /// - Track rows: the length the row would have if every string started at a multiple of
+    ///   4, rounded up to a multiple of 4, plus 4.
+    ///
+    /// A row whose gap bytes make it longer than that (rekordbox never writes one) is sized
+    /// by its own length instead, so it never overlaps the next row. The rules hold between
+    /// every pair of real rows with zero bytes between them, and for the last row of each
+    /// page up to `used_size` (`writer::local::real_heap_footprints_match_the_gaps`).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`encode`](Self::encode).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
+    )]
+    pub(crate) fn heap_footprint(&self) -> Result<usize, EncodeError> {
+        /// What artist, album and track rows take after their rounded-up length.
+        const TRAILER: usize = 4;
+        let len = self.encode()?.len();
+        let (sized, trailer) = match self {
+            Self::Track(row) => (row.aligned_len(), TRAILER),
+            Self::Artist(row) => (row.far_len(), TRAILER),
+            Self::Album(row) => (row.far_len(), TRAILER),
+            Self::Genre(_) | Self::Label(_) | Self::Key(_) | Self::Color(_) | Self::Artwork(_) => {
+                (len, 0)
+            }
+        };
+        sized
+            .max(len)
+            .checked_next_multiple_of(4)
+            .and_then(|sized| sized.checked_add(trailer))
+            .ok_or(EncodeError::LengthOverflow {
+                context: "pdb row heap footprint",
+            })
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +239,78 @@ mod tests {
             let decoded = ExportRow::decode(table, &raw(&bytes)).unwrap();
             assert_eq!(decoded, Some(row), "{table:?}");
         }
+    }
+
+    fn footprint(row: ExportRow) -> (usize, usize) {
+        (row.encode().unwrap().len(), row.heap_footprint().unwrap())
+    }
+
+    #[test]
+    fn rows_with_one_inline_string_take_their_length_rounded_up_to_4() {
+        let genre = |name| ExportRow::Genre(Genre::new(GenreId::new(1).unwrap(), name));
+        assert_eq!(footprint(genre("House")), (10, 12));
+        assert_eq!(footprint(genre("Pop")), (8, 8));
+        let key = ExportRow::Key(Key::new(KeyId::new(5).unwrap(), "8A"));
+        assert_eq!(footprint(key), (11, 12));
+        let color = ExportRow::Color(Color::new(ColorId::new(1).unwrap(), "Pink"));
+        assert_eq!(footprint(color), (13, 16));
+        let label = ExportRow::Label(Label::new(LabelId::new(4).unwrap(), "Ö"));
+        assert_eq!(footprint(label), (10, 12));
+        let artwork = ExportRow::Artwork(Artwork::new(ArtworkId::new(7).unwrap(), "/a.jpg"));
+        assert_eq!(footprint(artwork), (11, 12));
+    }
+
+    #[test]
+    fn artists_and_albums_take_their_far_length_rounded_up_to_4_plus_4() {
+        let artist = |name| ExportRow::Artist(Artist::new(ArtistId::new(2).unwrap(), name));
+        // Near 10 + 5; far 12 + 5 = 17, rounded up to 20, plus 4.
+        assert_eq!(footprint(artist("Abba")), (15, 24));
+        // 12 + 4 = 16 either way (near with a 2-byte gap), plus 4.
+        assert_eq!(footprint(artist("Ab")), (13, 20));
+        assert_eq!(footprint(artist("Ö")), (18, 24));
+        let (album_id, artist_id) = (AlbumId::new(3).unwrap(), ArtistId::new(2));
+        let album = |name| ExportRow::Album(Album::new(album_id, name, artist_id));
+        // Near 0x16 + 6; far 0x18 + 6 = 30, rounded up to 32, plus 4.
+        assert_eq!(footprint(album("Debut")), (28, 36));
+        assert_eq!(footprint(album("Ö")), (30, 36));
+    }
+
+    #[test]
+    fn a_gap_longer_than_rekordbox_writes_never_overlaps_the_next_row() {
+        let artist = Artist::new(ArtistId::new(2).unwrap(), "Abba");
+        let artist = artist.with_name_gap(vec![0; 20]);
+        assert_eq!(footprint(ExportRow::Artist(artist)), (35, 40));
+    }
+
+    #[test]
+    fn tracks_take_every_string_rounded_up_to_4_plus_4() {
+        let fields = TrackFields {
+            title: "Jóga".into(),
+            isrc: "GBAYE9700001".into(),
+            date_added: "2024-01-02".into(),
+            ..TrackFields::default()
+        };
+        let track = Track::new(TrackId::new(8).unwrap(), fields).unwrap();
+        let strings: Vec<usize> = TrackString::ALL
+            .iter()
+            .map(|&s| track.string(s).encoded_len())
+            .collect();
+        // ISRC 4 + 1 + 12 + 1; "2", "1", "ON", "ON", the date and the UTF-16 title; the
+        // other 14 slots are empty short strings.
+        assert_eq!(
+            strings,
+            [
+                18, 1, 2, 2, 1, 1, 3, 3, 1, 1, 11, 1, 1, 1, 1, 1, 1, 12, 1, 1, 1
+            ]
+        );
+        // The fixed part (0x88), then 20 + 9 × 4 + 12 + 6 × 4 + 12 + 3 × 4, then 4.
+        let row = ExportRow::Track(track);
+        assert_eq!(row.heap_footprint().unwrap(), 0x88 + 116 + 4);
+        assert_eq!(
+            row.encode().unwrap().len(),
+            // The title is aligned after 2 gap bytes.
+            0x88 + strings.iter().sum::<usize>() + 2
+        );
     }
 
     #[test]
@@ -298,6 +446,13 @@ mod tests {
                 let bytes = row.encode().unwrap();
                 let decoded = ExportRow::decode(table, &raw(&bytes)).unwrap();
                 prop_assert_eq!(decoded, Some(row));
+            }
+
+            #[test]
+            fn a_row_fits_its_footprint_which_keeps_rows_aligned((_, row) in row()) {
+                let footprint = row.heap_footprint().unwrap();
+                prop_assert!(footprint >= row.encode().unwrap().len());
+                prop_assert_eq!(footprint % 4, 0);
             }
 
             #[test]
