@@ -19,9 +19,10 @@ const FIRST_PAGE_FIELD: usize = 8;
 /// Smallest `len_page` accepted: room for a data page's header, so every page can at least
 /// hold its fixed header.
 const MIN_LEN_PAGE: usize = HEAP_START;
-/// The header's `unknown2` (0x10) in built files: 1 in the real `export.pdb` and
-/// `exportExt.pdb`.
-const HEADER_UNKNOWN2: u32 = 1;
+/// The header's `unknown2` (0x10) in built files: 5 in a fresh rekordbox export's
+/// `export.pdb` and `exportExt.pdb` (`local-fixtures/rekordbox-hw1`). The old, long-lived
+/// stick has 1 in both; decoding keeps whatever a file holds.
+const HEADER_UNKNOWN2: u32 = 5;
 
 /// A whole `export.pdb`, as stored.
 ///
@@ -140,10 +141,11 @@ impl Pdb {
         })
     }
 
-    /// A file built from its parts, as rekordbox writes the header: `unknown1` and
-    /// `unknown3` 0, `unknown2` 1, and the rest of page 0 after the table pointers zero.
-    /// `pages` are pages 1 onwards; `None` is a zero-filled page that no chain reaches. Each
-    /// page is placed at its position, so row errors are located as in a decoded file.
+    /// A file built from its parts, as rekordbox writes the header of a fresh export:
+    /// `unknown1` and `unknown3` 0, `unknown2` 5, and the rest of page 0 after the table
+    /// pointers zero. `pages` are pages 1 onwards; `None` is a zero-filled page that no
+    /// chain reaches. Each page is placed at its position, so row errors are located as in a
+    /// decoded file.
     ///
     /// # Errors
     ///
@@ -400,7 +402,7 @@ mod tests {
         assert_eq!(pdb.unknown1(), 0);
         assert_eq!(pdb.len_page(), LEN as u32);
         assert_eq!(pdb.next_unused_page(), NEXT_UNUSED);
-        assert_eq!(pdb.unknown2(), 1);
+        assert_eq!(pdb.unknown2(), 5);
         assert_eq!(pdb.sequence(), SEQUENCE);
         assert_eq!(pdb.unknown3(), 0);
         assert_eq!(pdb.header_tail().len(), LEN - 0x1c - 16);
@@ -457,6 +459,16 @@ mod tests {
         .expect("builds");
         assert_eq!(built, pdb);
         assert_eq!(built.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_decoded_header_keeps_its_unknowns() {
+        // The old stick's `unknown2` is 1; a built file has 5.
+        let mut bytes = minimal_file();
+        set_u32(&mut bytes, 0x10, 1);
+        set_u32(&mut bytes, 0x18, 0xabcd);
+        let pdb = assert_round_trip(&bytes);
+        assert_eq!((pdb.unknown2(), pdb.unknown3()), (1, 0xabcd));
     }
 
     #[test]

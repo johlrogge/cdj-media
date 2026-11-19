@@ -154,7 +154,7 @@ pub(super) fn has_tombstones(page: &Page) -> bool {
 }
 
 /// The tables whose rows are typed.
-pub(super) const TYPED: [ExportTable; 8] = [
+pub(super) const TYPED: [ExportTable; 10] = [
     ExportTable::Tracks,
     ExportTable::Genres,
     ExportTable::Artists,
@@ -162,6 +162,8 @@ pub(super) const TYPED: [ExportTable; 8] = [
     ExportTable::Labels,
     ExportTable::Keys,
     ExportTable::Colors,
+    ExportTable::PlaylistTree,
+    ExportTable::PlaylistEntries,
     ExportTable::Artwork,
 ];
 
@@ -185,6 +187,9 @@ enum Layout {
     /// The next row starts inside the footprint.
     Overlaps,
 }
+
+/// The number of rows of a [`Layout`], on pages with deleted rows or not.
+type LayoutCount = ((Layout, bool), usize);
 
 /// How each present row of a page of a typed table lies, by slot, with the bytes from its
 /// start to the next row's and its footprint. Rows lie in the heap in slot order (checked by
@@ -238,6 +243,7 @@ fn real_heap_footprints_match_the_gaps() {
     };
     let mut failures = Vec::new();
     let mut four_further = 0;
+    let mut playlists = Vec::new();
     eprintln!("heap footprints against the gaps between rows:");
     for table in TYPED {
         let mut categories: BTreeMap<(Layout, bool), usize> = BTreeMap::new();
@@ -276,9 +282,33 @@ fn real_heap_footprints_match_the_gaps() {
             };
             eprintln!("    {count:4} {layout:?}{on}");
         }
+        if matches!(
+            table,
+            ExportTable::PlaylistTree | ExportTable::PlaylistEntries
+        ) {
+            playlists.push((table, categories.into_iter().collect::<Vec<_>>()));
+        }
     }
     assert_none(&failures);
     assert_eq!(four_further, FOUR_FURTHER, "rows 4 zero bytes further on");
+    // (layout, on a page with deleted rows) counts of the present playlist rows: entries are
+    // all exact; tree rows (both pages with deleted rows) are exact or hold leftover bytes
+    // of a longer, earlier name, rewritten in place.
+    let pinned: Vec<(ExportTable, Vec<LayoutCount>)> = vec![
+        (
+            ExportTable::PlaylistTree,
+            vec![
+                ((Layout::Exact, true), 9),
+                ((Layout::LeftoverInPadding, true), 18),
+                ((Layout::LeftoverFurtherOn, true), 5),
+            ],
+        ),
+        (
+            ExportTable::PlaylistEntries,
+            vec![((Layout::Exact, false), 588), ((Layout::Exact, true), 315)],
+        ),
+    ];
+    assert_eq!(playlists, pinned, "playlist row layouts");
 }
 
 /// The links of a real page, for its rebuild.
@@ -391,6 +421,22 @@ fn real_data_pages_rebuild_from_their_typed_rows() {
     }
     eprintln!("  all: {totals:?}");
     assert_none(&failures);
+    let playlists: Vec<(&str, Vec<(Rebuild, usize)>)> = ["PlaylistTree", "PlaylistEntries"]
+        .into_iter()
+        .map(|t| {
+            let categories = counts.get(t).cloned().unwrap_or_default();
+            (t, categories.into_iter().collect())
+        })
+        .collect();
+    // Both tree pages have deleted rows; the entry pages without them rebuild, all 4.
+    let pinned = [
+        ("PlaylistTree", vec![(Rebuild::DeletedRows, 2)]),
+        (
+            "PlaylistEntries",
+            vec![(Rebuild::Identical, 4), (Rebuild::DeletedRows, 2)],
+        ),
+    ];
+    assert_eq!(playlists, pinned, "playlist pages");
 }
 
 /// The decoded present rows of a page, in slot order.
@@ -536,6 +582,243 @@ fn real_data_page_header_fields() {
         eprintln!("  {count:4} {shape}");
     }
     assert_none(&failures);
+}
+
+/// The fresh rekordbox export, next to the old stick.
+const FRESH_EXPORT: &str = "local-fixtures/rekordbox-hw1/PIONEER/rekordbox/export.pdb";
+
+/// Counts of `values`, by value.
+fn histogram<T: Ord>(values: impl Iterator<Item = T>) -> BTreeMap<T, usize> {
+    let mut out = BTreeMap::new();
+    for value in values {
+        *out.entry(value).or_default() += 1;
+    }
+    out
+}
+
+/// The shapes of a file's playlist rows: (name, count) pairs.
+fn playlist_survey(pdb: &Pdb) -> Vec<(String, usize)> {
+    use super::super::{PlaylistEntry, PlaylistId, PlaylistNode, TrackId};
+    let mut out: Vec<(String, usize)> = Vec::new();
+    let mut put = |name: &str, count: usize| out.push((name.to_owned(), count));
+    let (mut round_trips, mut untyped, mut rows) = (0, 0, 0);
+    let mut nodes: Vec<PlaylistNode> = Vec::new();
+    let mut entries: Vec<PlaylistEntry> = Vec::new();
+    for table in [ExportTable::PlaylistTree, ExportTable::PlaylistEntries] {
+        for raw in pdb.table_pages(table).flat_map(Page::rows) {
+            rows += 1;
+            let row = ExportRow::decode(table, &raw).expect("decodes");
+            let Some(row) = row else {
+                untyped += 1;
+                continue;
+            };
+            let bytes = row.encode().unwrap();
+            round_trips += usize::from(raw.bytes().get(..bytes.len()) == Some(&bytes[..]));
+            match row {
+                ExportRow::PlaylistNode(node) => nodes.push(node),
+                ExportRow::PlaylistEntry(entry) => entries.push(entry),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+    put("rows", rows);
+    put("rows that round-trip", round_trips);
+    put("rows untyped", untyped);
+    put("tree rows", nodes.len());
+    for (value, n) in histogram(nodes.iter().map(PlaylistNode::raw_is_folder)) {
+        put(&format!("tree raw_is_folder {value}"), n);
+    }
+    for (value, n) in histogram(nodes.iter().map(PlaylistNode::unknown)) {
+        put(&format!("tree unknown {value:#x}"), n);
+    }
+    for (form, n) in histogram(nodes.iter().map(|n| format!("{:?}", n.name().form()))) {
+        put(&format!("tree name form {form}"), n);
+    }
+    let ids: Vec<u32> = nodes.iter().map(|n| n.id().get()).collect();
+    put("tree distinct ids", histogram(ids.iter()).len());
+    let highest = ids.iter().copied().max().unwrap_or(0);
+    put("tree highest id", highest as usize);
+    let folders: BTreeMap<PlaylistId, bool> =
+        nodes.iter().map(|n| (n.id(), n.is_folder())).collect();
+    let folder = |id| folders.get(&id).copied();
+    let mut parents: BTreeMap<&str, usize> = BTreeMap::new();
+    for n in &nodes {
+        let kind = match n.parent_id().map(folder) {
+            None => "root",
+            Some(Some(true)) => "a folder",
+            Some(Some(false)) => "a playlist",
+            Some(None) => "missing",
+        };
+        *parents.entry(kind).or_default() += 1;
+    }
+    for (kind, n) in parents {
+        put(&format!("tree parent {kind}"), n);
+    }
+    // Per parent: are the children's sort orders 0..n, and do they rise with the id?
+    let mut children: BTreeMap<u32, Vec<(u32, u32, String)>> = BTreeMap::new();
+    for n in &nodes {
+        let parent = n.parent_id().map_or(0, |p| p.get());
+        let name = n.name().as_str().to_owned();
+        children
+            .entry(parent)
+            .or_default()
+            .push((n.id().get(), n.sort_order(), name));
+    }
+    // Parents whose children's sort orders are 0..n, 1..n, and rise with the id, the name
+    // and the case-folded name.
+    let mut sorted = [0usize; 5];
+    for kids in children.values_mut() {
+        let rising = |kids: &[(u32, u32, String)]| kids.windows(2).all(|w| w[0].1 < w[1].1);
+        kids.sort_by(|a, b| a.2.cmp(&b.2));
+        sorted[3] += usize::from(rising(kids));
+        kids.sort_by_key(|k| k.2.to_lowercase());
+        sorted[4] += usize::from(rising(kids));
+        kids.sort_unstable();
+        sorted[2] += usize::from(rising(kids));
+        let mut orders: Vec<u32> = kids.iter().map(|k| k.1).collect();
+        orders.sort_unstable();
+        let n = orders.len() as u32;
+        sorted[0] += usize::from(orders == (0..n).collect::<Vec<u32>>());
+        sorted[1] += usize::from(orders == (1..=n).collect::<Vec<u32>>());
+    }
+    put("parents", children.len());
+    let kinds = [
+        "0..n",
+        "1..n",
+        "rising with the id",
+        "rising with the name",
+        "rising with the case-folded name",
+    ];
+    for (kind, n) in kinds.into_iter().zip(sorted) {
+        put(&format!("parents with sort orders {kind}"), n);
+    }
+
+    put("entry rows", entries.len());
+    let tracks: Vec<u32> = pdb
+        .table_pages(ExportTable::Tracks)
+        .flat_map(Page::rows)
+        .map(|raw| super::super::Track::decode(&raw).unwrap().id().get())
+        .collect();
+    let missing_track = |t: TrackId| !tracks.contains(&t.get());
+    let of = |e: &PlaylistEntry| e.playlist_id().and_then(folder);
+    let mut kinds = [0usize; 5];
+    for e in &entries {
+        kinds[0] += usize::from(e.track_id().is_none());
+        kinds[1] += usize::from(e.playlist_id().is_none());
+        kinds[2] += usize::from(e.track_id().is_some_and(missing_track));
+        kinds[3] += usize::from(of(e).is_none());
+        kinds[4] += usize::from(of(e) == Some(true));
+    }
+    let names = [
+        "without a track",
+        "without a playlist",
+        "of a missing track",
+        "of a missing playlist",
+        "of a folder",
+    ];
+    for (name, n) in names.into_iter().zip(kinds) {
+        put(&format!("entries {name}"), n);
+    }
+    let mut lists: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for e in &entries {
+        let playlist = e.playlist_id().map_or(0, |p| p.get());
+        lists.entry(playlist).or_default().push(e.entry_index());
+    }
+    put("playlists with entries", lists.len());
+    let in_order = lists.values().filter(|l| l.windows(2).all(|w| w[0] < w[1]));
+    put(
+        "playlists whose entries lie in index order",
+        in_order.count(),
+    );
+    let mut one_to_n = 0;
+    for list in lists.values_mut() {
+        list.sort_unstable();
+        let n = list.len() as u32;
+        one_to_n += usize::from(*list == (1..=n).collect::<Vec<u32>>());
+    }
+    put("playlists with entry indices 1..n", one_to_n);
+    out
+}
+
+/// Every playlist tree and playlist entry row of both sticks decodes as a typed row and
+/// re-encodes to its bytes; the shapes behind the typed rows and `Database`'s playlists
+/// are pinned. Counts only: playlist names are library data.
+#[test]
+fn real_playlist_rows_round_trip() {
+    let pinned: [Vec<(&str, usize)>; 2] = [
+        vec![
+            ("rows", 935),
+            ("rows that round-trip", 935),
+            ("rows untyped", 0),
+            ("tree rows", 32),
+            ("tree raw_is_folder 0", 32),
+            ("tree unknown 0x0", 32),
+            ("tree name form ShortAscii", 32),
+            ("tree distinct ids", 32),
+            ("tree highest id", 32),
+            ("tree parent root", 32),
+            ("parents", 1),
+            ("parents with sort orders 0..n", 1),
+            ("parents with sort orders 1..n", 0),
+            ("parents with sort orders rising with the id", 0),
+            ("parents with sort orders rising with the name", 0),
+            (
+                "parents with sort orders rising with the case-folded name",
+                0,
+            ),
+            ("entry rows", 903),
+            ("entries without a track", 0),
+            ("entries without a playlist", 0),
+            ("entries of a missing track", 0),
+            ("entries of a missing playlist", 0),
+            ("entries of a folder", 0),
+            ("playlists with entries", 31),
+            ("playlists whose entries lie in index order", 31),
+            ("playlists with entry indices 1..n", 31),
+        ],
+        vec![
+            ("rows", 7),
+            ("rows that round-trip", 7),
+            ("rows untyped", 0),
+            ("tree rows", 1),
+            ("tree raw_is_folder 0", 1),
+            ("tree unknown 0x0", 1),
+            ("tree name form ShortAscii", 1),
+            ("tree distinct ids", 1),
+            ("tree highest id", 1),
+            ("tree parent root", 1),
+            ("parents", 1),
+            ("parents with sort orders 0..n", 1),
+            ("parents with sort orders 1..n", 0),
+            ("parents with sort orders rising with the id", 1),
+            ("parents with sort orders rising with the name", 1),
+            (
+                "parents with sort orders rising with the case-folded name",
+                1,
+            ),
+            ("entry rows", 6),
+            ("entries without a track", 0),
+            ("entries without a playlist", 0),
+            ("entries of a missing track", 0),
+            ("entries of a missing playlist", 0),
+            ("entries of a folder", 0),
+            ("playlists with entries", 1),
+            ("playlists whose entries lie in index order", 1),
+            ("playlists with entry indices 1..n", 1),
+        ],
+    ];
+    for (path, pinned) in [EXPORT, FRESH_EXPORT].into_iter().zip(pinned) {
+        let Some(pdb) = load_from(path) else {
+            continue;
+        };
+        let survey = playlist_survey(&pdb);
+        eprintln!("playlist rows of {path}:");
+        for (name, n) in &survey {
+            eprintln!("  {name}: {n}");
+        }
+        let pinned: Vec<(String, usize)> = pinned.iter().map(|&(k, n)| (k.to_owned(), n)).collect();
+        assert_eq!(survey, pinned, "{path}");
+    }
 }
 
 /// `page_sizes` gives back `free_size` and `used_size` from `used_size` and the row count on

@@ -25,7 +25,7 @@ pub(crate) fn header_page(tables: &[[u32; 4]]) -> Vec<u8> {
             LEN as u32,
             tables.len() as u32,
             NEXT_UNUSED,
-            1,
+            5,
             SEQUENCE,
             0,
         ],

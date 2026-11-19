@@ -216,7 +216,9 @@ rekordbox-exported, CDJ-played stick.
     rebuilt: 174 pages with deleted rows (168 of the 178 track pages) and 27 pages of
     untyped tables. Per table, identical of typed pages without deleted rows: tracks 1 of
     10, genres 6 of 6, artists 8 of 9, albums 17 of 19, labels 5 of 5, keys 11 of 11,
-    colours 1 of 1, artwork 30 of 30.
+    colours 1 of 1, artwork 30 of 30. With the playlist tables typed (slice 7e2): 83 of
+    95, playlist entries 4 of 4 (the tree's 2 pages both have deleted rows); not rebuilt
+    178 pages with deleted rows and 19 of untyped tables.
   - **Page breaks:** a page ends when the next row, its footprint and its row index entry
     (2 bytes, or 6 for a new group) no longer fit; a page may end with 0 bytes free (5
     artwork pages of 106 rows). No row-count limit shows: pages hold up to 116 artist,
@@ -262,23 +264,45 @@ rekordbox-exported, CDJ-played stick.
     free space". The 8 tables without deleted rows have empty index pages, and building an
     empty index page from the page's links gives all 8 back byte for byte; the other 12
     equal the built page except for the entries, their count and the two `u16`s above.
-- **Untyped tables:** playlist tree 2 data pages (229 row offsets, 32 present), playlist
-  entries 6 (903 present rows of 12 bytes), history playlists 7 (10 present), history
-  entries 7 (83 present), history 1 (1 present of 96), table 17 2 pages (22 present rows of
-  8 bytes, rewritten: `sequence` 2,326 to 2,332), table 18 1 page (17 rows of 8 bytes,
-  `sequence` 5, never rewritten). Tables 9, 10, 14 and 15 are empty.
+- **Untyped tables:** history playlists 7 data pages (10 present), history entries 7 (83
+  present), history 1 (1 present of 96), table 17 2 pages (22 present rows of 8 bytes,
+  rewritten: `sequence` 2,326 to 2,332), table 18 1 page (17 rows of 8 bytes, `sequence`
+  5, never rewritten). Tables 9, 10, 14 and 15 are empty.
+- **Playlist rows** (typed since slice 7e2; checked on both fixtures by
+  `src/pdb/writer/local.rs::real_playlist_rows_round_trip`): every tree and entry row of
+  both sticks decodes as a typed row and re-encodes to its bytes (935 rows here, 7 on the
+  fresh export).
+  - Playlist tree (2 data pages, 229 row offsets, 32 present): u32s parent (0 for the
+    root), `unknown`, sort order, id and folder flag, then the name at 0x14, directly after
+    them. Here: 32 playlists, all at the root, no folders, `unknown` 0 and the folder flag 0
+    on every row, ids 1 to 32 without gaps, every name short ASCII. The sort orders are
+    0 to 31, but follow neither the ids nor the names (exactly or case-folded): the user
+    reordered them.
+  - Playlist entries (6 data pages, 903 present rows of 12 bytes): u32s entry index, track
+    id and playlist id. No entry is of track or playlist 0, of a missing track or playlist,
+    or of a folder. 31 playlists have entries (one is empty); every playlist's entry
+    indices are 1 to n, and its rows lie in index order.
+  - Footprints: both row kinds take their length rounded up to 4. All 903 entry rows lie
+    exactly so; the tree rows (both pages have deleted rows) lie exactly (9) or hold
+    leftover bytes of a longer, earlier name after them (18 in the padding, 5 further on).
+    The 4 entry pages without deleted rows rebuild byte for byte with `build_data_page`.
 - **Fixed tables:** the colour and column tables are one data page each, written once in
   one transaction. The 8 colour rows (ids 1–8) and the 27 column rows equal rekordbox's
   defaults: building each page from the defaults (`writer::fixed`) with its links gives it
   back byte for byte. A column row is an id (`u16`, 1–27), a second `u16` (0x80 to 0xaa,
   not in id order) and the label as UTF-16LE between U+FFFA and U+FFFB (`GENRE`,
-  `ARTIST`, …, `MATCHING`); it takes its length rounded up to 4 in the heap.
+  `ARTIST`, …, `MATCHING`); it takes its length rounded up to 4 in the heap. Table 18's
+  page equals the page built from the fresh export's 17 rows (`writer::fixed`); table 17
+  holds changed settings (see the fresh export below).
 - **A fresh file from the stick's rows** (`write_pdb`): 144 pages against 331 (tracks 92
   data pages against 178, artwork 8 against 31, the small tables 1 to 4 against 5 to 20),
   `next_unused_page` 153, `sequence` 114. All 2,221 typed rows come back in order, and it
   loads into the same `Database` as the stick, with no dangling reference.
   `Database::to_pdb` writes the same layout from the loaded database (144 pages), its
-  own colour table included, and the result loads back equal to it.
+  own colour table included, and the result loads back equal to it. Since slice 7e2 the
+  file also holds the playlist tables and tables 17 and 18 (147 pages), and the loaded
+  database, its 32 playlists and 903 playlist tracks included, comes back equal, with no
+  dangling reference.
 - **Names and ids** (checked by `tests/database_local.rs`):
   - Names are unique within every small table, compared exactly: artists 277, albums 239,
     genres 19, labels 21, keys 43, artwork paths 787. Case counts: 3 pairs of artists
@@ -325,8 +349,8 @@ old stick too. Checked by `src/pdb/writer/local_fresh.rs` (pages) and
     last row and its `tranrf` bit on the artist, album, key, artwork and playlist-entry pages
     (2 rows on track page 50 and the history page). Whole-page values only on colours,
     columns, tables 17 and 18 and the one-row genre and playlist-tree pages.
-- **Header:** `unknown1` 0, `len_page` 4,096, `unknown2` **5** (the old stick has 1),
-  `unknown3` 0, zero tail; 51 pages. `sequence` is 49, **4** more than the highest page
+- **Header:** `unknown1` 0, `len_page` 4,096, `unknown2` **5** (the old stick has 1; a
+  built file has 5 since slice 7e2), `unknown3` 0, zero tail; 51 pages. `sequence` is 49, **4** more than the highest page
   `sequence` (45). `next_unused_page` is 55, one past the highest `empty_candidate`.
   `exportExt.pdb` also has `unknown2` 5 (`sequence` 7, 18 pages, `next_unused_page` 22).
 - **Layout:** 20 tables, types 0 to 19 in order; table `t`'s index page at 2t + 1 and its
@@ -351,20 +375,36 @@ old stick too. Checked by `src/pdb/writer/local_fresh.rs` (pages) and
 - **Fixed tables:** the colour and column pages equal the built defaults. Tables 17 and 18
   have rows in a fresh export: 22 and 17 rows of 8 bytes, one page each, written at creation.
   Table 18's heap equals the old stick's byte for byte; table 17 shares 13 of 22 rows with
-  the old stick, so it holds values that changed there.
+  the old stick, so it holds values that changed there. Both look like browse menu
+  settings, not library data: no strings, and each row starts with a `u16` that takes only
+  column ids (1 to 27, each once per table). Table 17's row is that id, a `u16` (1 to 27),
+  a byte (99, or 1 to 6), a byte (0 to 2) and a `u16` (0 on the first 12 rows, then 1 to
+  10); table 18's is the id, a `u16` (17 distinct values from 0 to 17) and two bytes, (1,
+  0) on the first 10 rows and (0, 1 to 7) on the other 7. `writer::fixed` holds the fresh
+  export's rows, and the page built from them with the export's links and whole-page
+  transaction values equals each page byte for byte.
 - **Playlists:** the playlist tree has one row: u32s parent 0, unknown 0, sort order 0, id 1,
   folder flag 0, then the name at 0x14 (short ASCII, 13 characters), 34 bytes padded to 36.
   Playlist entries are 6 rows of 12 bytes, (entry index, track id, playlist id) = (k, k, 1)
-  for k = 1 to 6. History playlists and history entries are empty (an index page only).
+  for k = 1 to 6. History playlists and history entries are empty (an index page only). Both
+  pages rebuild byte for byte with `build_data_page` (the tree page with whole-page
+  transaction values, the entry page with its recorded ones). Rebuilt through `Database`
+  (`add_playlist` with the playlist's name at the root, then `add_to_playlist` for each
+  track in entry order), `to_pdb` writes the tree and entry rows byte for byte as rekordbox
+  did, and the fresh export's database survives `to_pdb` equal, with no dangling
+  reference.
 - **Table 19 (history):** 40-byte rows: u16 0x0280, u16 0x20 × slot (an `index_shift`), u32
   0 to 6 rising with each version, 4 zero bytes, then a 10-character date-shaped string, two
   bytes 0x19 0x1e (offsets of the next two strings), a 4-digit string and an empty string.
   The versions are equal from byte 8 on.
-- **Against `write_pdb`** from the export's own typed rows: ours has 40 pages,
-  `next_unused_page` 49, `sequence` 10 and `unknown2` 1. 21 pages are identical (the empty
-  index pages and zero candidate pages at 2t + 2). The rest differ in links and sequences,
-  the transaction fields, the track pages, the index and data pages of the playlist tree,
-  playlist entries, tables 17 and 18 and history, and every page from 40 on, past our end.
+- **Against `write_pdb`** from the export's own typed rows (playlist rows included, since
+  slice 7e2): ours has 40 pages, `next_unused_page` 53, `sequence` 14 and `unknown2` 5.
+  25 pages are identical (the empty index pages, those of the playlist tables and tables 17
+  and 18 included, and zero candidate pages at 2t + 2). The playlist tree, colour, column,
+  17 and 18 data pages differ only in links and sequences; the rest differ in the
+  transaction fields too, the track pages, the index and data pages of history, and every
+  page from 40 on, past our end. (Before 7e2: `next_unused_page` 49, `sequence` 10,
+  `unknown2` 1, 21 identical pages.)
 - **Track rows:** `subtype`, `bitmask` (0xc0700), `unknown3`, `unknown4`, `unknown5` and
   `unknown7` are the builder's defaults on all 6. `unknown2` is not the track id (26 to 28
   bits) and **equals the old stick's `unknown2` for the same audio file on all 6**, as do

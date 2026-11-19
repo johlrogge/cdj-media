@@ -321,13 +321,74 @@ fn fresh_export_database_rebuilds_with_rekordbox_ids() {
         moved += usize::from(id != t.id());
     }
     pins.eq("references or ids that differ from rekordbox's", moved, 0);
+    // The playlist, through the public API in rekordbox's order: the playlist, then its
+    // tracks in entry order.
+    let playlists: Vec<_> = db.playlists().collect();
+    let [playlist] = playlists[..] else {
+        panic!("one playlist");
+    };
+    let id = new.add_playlist(playlist.name(), playlist.parent_id());
+    pins.eq("the rebuilt playlist's id", id, Ok(playlist.id()));
+    for track in db.playlist_tracks(playlist.id()) {
+        new.add_to_playlist(playlist.id(), track);
+    }
+    pins.eq(
+        "playlists, playlist tracks",
+        (
+            db.playlists().len(),
+            db.playlist_tracks(playlist.id()).count(),
+        ),
+        (1, 6),
+    );
     pins.eq(
         "the rebuilt database equals the loaded one",
         new == db,
         true,
     );
+    let written = new.to_pdb().unwrap();
+    for table in [ExportTable::PlaylistTree, ExportTable::PlaylistEntries] {
+        pins.eq(
+            &format!("{table:?}: our rows equal rekordbox's, byte for byte"),
+            row_bytes(&written, table) == row_bytes(&pdb, table),
+            true,
+        );
+    }
     let with_artwork = db.tracks().filter(|t| t.artwork_id().is_some()).count();
     pins.eq("tracks with artwork", with_artwork, 5);
+    pins.check();
+}
+
+/// The bytes of every present row of `table`, in chain order, as long as its typed row.
+fn row_bytes(pdb: &Pdb, table: ExportTable) -> Vec<Vec<u8>> {
+    pdb.table_pages(table)
+        .flat_map(|p| p.rows())
+        .map(|raw| {
+            let row = ExportRow::decode(table, &raw)
+                .unwrap()
+                .expect("a typed row");
+            let len = row.encode().unwrap().len();
+            raw.bytes()[..len].to_vec()
+        })
+        .collect()
+}
+
+/// The fresh export's database, written with `to_pdb`, encoded, decoded and loaded again,
+/// equals the loaded one, playlists included, with no dangling reference.
+#[test]
+fn fresh_export_database_survives_to_pdb() {
+    let Some(root) = common::local_fixture(ROOT) else {
+        return;
+    };
+    let db = Database::from_pdb(&read_pdb(&root.join("rekordbox/export.pdb"))).unwrap();
+    let bytes = db.to_pdb().unwrap().to_bytes().unwrap();
+    let back = Database::from_pdb(&Pdb::from_bytes(&bytes).unwrap()).unwrap();
+    let mut pins = Pins::default();
+    pins.eq("written and loaded again, equal", back == db, true);
+    pins.eq(
+        "playlists, dangling references",
+        (back.playlists().len(), back.dangling_references().count()),
+        (1, 0),
+    );
     pins.check();
 }
 

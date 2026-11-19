@@ -4,7 +4,8 @@ use crate::encoding::{Bpm, StringForm};
 use crate::pdb::testutil::{LEN, data_page, file, row_index_len};
 use crate::pdb::{
     Album as AlbumRow, Artist as ArtistRow, Artwork as ArtworkRow, Color as ColorRow, ExportRow,
-    ExportTable, FileType, Genre as GenreRow, Key as KeyRow, Label as LabelRow, Track as TrackRow,
+    ExportTable, FileType, Genre as GenreRow, Key as KeyRow, Label as LabelRow,
+    PlaylistEntry as PlaylistEntryRow, PlaylistNode as PlaylistNodeRow, Track as TrackRow,
     TrackFields,
 };
 
@@ -582,6 +583,7 @@ fn a_dangling_track_reference_loads_and_is_reported() {
         assert!(unresolved(&db, track), "{field:?}: resolves to None");
         let dangling: Vec<Dangling> = db.dangling_references().collect();
         let from = RecordId::Track(TrackId::new(8).unwrap());
+        let id = Some(id);
         assert_eq!(dangling, [Dangling { from, field, id }], "{field:?}");
     }
 }
@@ -604,7 +606,7 @@ fn a_dangling_album_artist_loads_and_is_reported() {
         [Dangling {
             from: RecordId::Album(AlbumId::new(31).unwrap()),
             field: Reference::AlbumArtist,
-            id: RecordId::Artist(ArtistId::new(99).unwrap()),
+            id: Some(RecordId::Artist(ArtistId::new(99).unwrap())),
         }]
     );
 }
@@ -904,7 +906,7 @@ fn a_dangling_reference_fails_to_pdb() {
     let dangling = Dangling {
         from: RecordId::Track(TrackId::new(3).unwrap()),
         field: Reference::TrackAlbum,
-        id: RecordId::Album(AlbumId::new(7).unwrap()),
+        id: Some(RecordId::Album(AlbumId::new(7).unwrap())),
     };
     let err = db.to_pdb().unwrap_err();
     assert_eq!(err, EncodeError::DanglingReference(dangling));
@@ -918,10 +920,318 @@ fn a_dangling_reference_fails_to_pdb() {
     let dangling = Dangling {
         from: RecordId::Album(AlbumId::new(30).unwrap()),
         field: Reference::AlbumArtist,
-        id: RecordId::Artist(ArtistId::new(99).unwrap()),
+        id: Some(RecordId::Artist(ArtistId::new(99).unwrap())),
     };
     let expected = EncodeError::DanglingReference(dangling);
     assert_eq!(db.to_pdb(), Err(expected));
+}
+
+fn playlist_id(id: u32) -> PlaylistId {
+    PlaylistId::new(id).unwrap()
+}
+
+fn node_row(id: u32, parent: u32, sort_order: u32, folder: bool, name: &str) -> ExportRow {
+    let parent = PlaylistId::new(parent);
+    let row = PlaylistNodeRow::new(playlist_id(id), parent, sort_order, folder, name);
+    ExportRow::PlaylistNode(row)
+}
+
+fn entry_row(index: u32, track: u32, playlist: u32) -> ExportRow {
+    let track = TrackId::new(track).unwrap();
+    ExportRow::PlaylistEntry(PlaylistEntryRow::new(index, track, playlist_id(playlist)))
+}
+
+/// The tracks of `id`, as raw ids.
+fn tracks_of(db: &Database, id: u32) -> Vec<u32> {
+    raw(db.playlist_tracks(playlist_id(id)))
+}
+
+#[test]
+fn playlist_rows_map_to_playlists_with_ordered_tracks() {
+    let tables = vec![
+        (
+            ExportTable::Tracks,
+            vec![
+                track_row(8, TrackFields::default()),
+                track_row(9, TrackFields::default()),
+            ],
+        ),
+        (
+            ExportTable::PlaylistTree,
+            vec![
+                node_row(3, 2, 0, false, "Warmup"),
+                node_row(2, 0, 1, true, "Sets"),
+                node_row(5, 0, 0, false, "Empty"),
+            ],
+        ),
+        // Entries out of index order and across pages.
+        (
+            ExportTable::PlaylistEntries,
+            vec![entry_row(2, 8, 3), entry_row(1, 9, 3), entry_row(3, 9, 3)],
+        ),
+    ];
+    let db = load(&tables);
+    let playlists: Vec<(u32, Option<PlaylistId>, u32, bool, &str)> = db
+        .playlists()
+        .map(|p| {
+            let id = p.id().get();
+            (id, p.parent_id(), p.sort_order(), p.is_folder(), p.name())
+        })
+        .collect();
+    assert_eq!(
+        playlists,
+        [
+            (2, None, 1, true, "Sets"),
+            (3, PlaylistId::new(2), 0, false, "Warmup"),
+            (5, None, 0, false, "Empty"),
+        ]
+    );
+    assert_eq!(tracks_of(&db, 3), [9, 8, 9]);
+    assert!(tracks_of(&db, 5).is_empty() && tracks_of(&db, 2).is_empty());
+    let empty = db.playlist(playlist_id(5));
+    assert_eq!(empty.map(Playlist::name), Some("Empty"));
+    assert_eq!(db.dangling_references().count(), 0);
+}
+
+#[test]
+fn a_built_playlist_survives_to_pdb_and_back() {
+    // Two tracks, 1 and 2, with every reference set.
+    let mut db = built();
+    let [first, second] = [1, 2].map(|id| TrackId::new(id).unwrap());
+    let id = db.add_playlist("Warmup", None).unwrap();
+    db.add_to_playlist(id, first);
+    db.add_to_playlist(id, second);
+    assert_eq!(id, playlist_id(1));
+    assert_eq!(db.playlist_tracks(id).collect::<Vec<_>>(), [first, second]);
+    let back = written_and_loaded(&db);
+    assert_eq!(back, db);
+    // The rows as rekordbox writes them.
+    let pdb = db.to_pdb().unwrap();
+    let rows = |table| -> Vec<ExportRow> {
+        pdb.table_pages(table)
+            .flat_map(|page| page.rows())
+            .map(|raw| ExportRow::decode(table, &raw).unwrap().unwrap())
+            .collect()
+    };
+    assert_eq!(
+        rows(ExportTable::PlaylistTree),
+        [node_row(1, 0, 0, false, "Warmup")]
+    );
+    assert_eq!(
+        rows(ExportTable::PlaylistEntries),
+        [entry_row(1, 1, 1), entry_row(2, 2, 1)]
+    );
+}
+
+#[test]
+fn playlists_and_folders_get_the_next_id_and_sort_order() {
+    let mut db = Database::new();
+    let a = db.add_playlist("A", None).unwrap();
+    let sets = db.add_folder("Sets", None).unwrap();
+    let b = db.add_playlist("B", Some(sets)).unwrap();
+    let c = db.add_playlist("C", None).unwrap();
+    let d = db.add_playlist("D", Some(sets)).unwrap();
+    let shape: Vec<(u32, Option<PlaylistId>, u32, bool)> = db
+        .playlists()
+        .map(|p| (p.id().get(), p.parent_id(), p.sort_order(), p.is_folder()))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (1, None, 0, false),
+            (2, None, 1, true),
+            (3, Some(sets), 0, false),
+            (4, None, 2, false),
+            (5, Some(sets), 1, false),
+        ]
+    );
+    assert_eq!(raw([a, sets, b, c, d].into_iter()), [1, 2, 3, 4, 5]);
+    assert_eq!(written_and_loaded(&db), db);
+    // A loaded database continues after its last id and its children's last sort order.
+    let nodes = vec![node_row(7, 0, 4, false, "X"), node_row(3, 0, 9, false, "Y")];
+    let mut db = load(&[(ExportTable::PlaylistTree, nodes)]);
+    let next = db.add_playlist("Z", None).unwrap();
+    assert_eq!(next, playlist_id(8));
+    assert_eq!(db.playlist(next).map(Playlist::sort_order), Some(10));
+}
+
+#[test]
+fn a_playlist_name_too_long_to_write_is_not_added() {
+    use crate::EncodeError;
+    let mut db = Database::new();
+    // Longer than the 16-bit length of a long DeviceSQL string.
+    let name = "é".repeat(0x8000);
+    let err = Err(EncodeError::LengthOverflow {
+        context: "DeviceSQL string length",
+    });
+    assert_eq!(db.add_playlist(&name, None), err);
+    assert_eq!(db.add_folder(&name, None), err);
+    assert_eq!(db, Database::new());
+}
+
+#[test]
+fn dangling_playlist_references_are_reported_and_refused() {
+    use crate::EncodeError;
+    let track = track_row(8, TrackFields::default());
+    let nodes = vec![node_row(1, 0, 0, false, "A"), node_row(2, 9, 0, false, "B")];
+    let tables = vec![
+        (ExportTable::Tracks, vec![track]),
+        (ExportTable::PlaylistTree, nodes),
+        (
+            ExportTable::PlaylistEntries,
+            vec![entry_row(1, 8, 1), entry_row(2, 7, 1), entry_row(1, 8, 4)],
+        ),
+    ];
+    let db = load(&tables);
+    let entry = |playlist, index| RecordId::PlaylistEntry {
+        playlist: PlaylistId::new(playlist),
+        index,
+    };
+    let dangling: Vec<Dangling> = db.dangling_references().collect();
+    assert_eq!(
+        dangling,
+        [
+            Dangling {
+                from: RecordId::Playlist(playlist_id(2)),
+                field: Reference::PlaylistParent,
+                id: Some(RecordId::Playlist(playlist_id(9))),
+            },
+            Dangling {
+                from: entry(1, 2),
+                field: Reference::PlaylistEntryTrack,
+                id: Some(RecordId::Track(TrackId::new(7).unwrap())),
+            },
+            Dangling {
+                from: entry(4, 1),
+                field: Reference::PlaylistEntryPlaylist,
+                id: Some(RecordId::Playlist(playlist_id(4))),
+            },
+        ]
+    );
+    assert_eq!(
+        db.to_pdb(),
+        Err(EncodeError::DanglingReference(dangling[0]))
+    );
+    assert!(db.contains(entry(1, 2)) && db.contains(entry(4, 1)));
+    assert!(!db.contains(entry(1, 3)) && !db.contains(entry(1, 0)));
+    assert!(db.contains(RecordId::Playlist(playlist_id(2))));
+    assert!(!db.contains(RecordId::Playlist(playlist_id(9))));
+    // Built: a track added to a playlist the database doesn't have.
+    let mut db = Database::new();
+    let track = db.add_track(TrackFields::default()).unwrap();
+    db.add_to_playlist(playlist_id(3), track);
+    let err = db.to_pdb().unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "dangling reference: PlaylistEntryPlaylist of PlaylistEntry { playlist: \
+         Some(PlaylistId(3)), index: 1 } names a missing Playlist(PlaylistId(3))"
+    );
+}
+
+#[test]
+fn bad_playlist_rows_are_errors_at_the_field() {
+    // A duplicate playlist id, at the second row's id.
+    let nodes = vec![node_row(4, 0, 0, false, "A"), node_row(4, 0, 1, false, "B")];
+    let (bytes, offsets) = file_of(&[(ExportTable::PlaylistTree, nodes)]);
+    let err = Database::from_pdb(&Pdb::from_bytes(&bytes).unwrap()).unwrap_err();
+    assert_eq!(
+        (err.offset, err.context, err.kind),
+        (
+            offsets[0][1] + 0x0c,
+            "pdb playlist id",
+            DecodeErrorKind::DuplicateId { id: 4 }
+        )
+    );
+    // A duplicate entry index of one playlist, at the second row's index.
+    let tables = vec![(
+        ExportTable::PlaylistEntries,
+        vec![entry_row(1, 8, 4), entry_row(1, 9, 4)],
+    )];
+    let (bytes, offsets) = file_of(&tables);
+    let err = Database::from_pdb(&Pdb::from_bytes(&bytes).unwrap()).unwrap_err();
+    assert_eq!(
+        (err.offset, err.context, err.kind),
+        (
+            offsets[0][1],
+            "pdb playlist entry index",
+            DecodeErrorKind::DuplicateId { id: 1 }
+        )
+    );
+}
+
+/// An entry row of the given (entry index, track, playlist), zeros included.
+fn raw_entry_row(values: [u32; 3]) -> ExportRow {
+    let mut bytes = Vec::new();
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let row = PlaylistEntryRow::decode(&crate::pdb::RawRow::new(0, &bytes, 0)).unwrap();
+    ExportRow::PlaylistEntry(row)
+}
+
+#[test]
+fn an_entry_of_track_or_playlist_0_loads_and_is_reported() {
+    use crate::EncodeError;
+    let track = track_row(8, TrackFields::default());
+    let node = node_row(4, 0, 0, false, "A");
+    let entries = vec![raw_entry_row([1, 0, 4]), raw_entry_row([2, 8, 0])];
+    let tables = vec![
+        (ExportTable::Tracks, vec![track]),
+        (ExportTable::PlaylistTree, vec![node]),
+        (ExportTable::PlaylistEntries, entries),
+    ];
+    let db = load(&tables);
+    let entry = |playlist, index| RecordId::PlaylistEntry {
+        playlist: PlaylistId::new(playlist),
+        index,
+    };
+    let dangling: Vec<Dangling> = db.dangling_references().collect();
+    // 0 means missing; the entry of playlist 0 comes first.
+    let expected = [
+        Dangling {
+            from: entry(0, 1),
+            field: Reference::PlaylistEntryPlaylist,
+            id: None,
+        },
+        Dangling {
+            from: entry(4, 1),
+            field: Reference::PlaylistEntryTrack,
+            id: None,
+        },
+    ];
+    assert_eq!(dangling, expected);
+    assert!(db.contains(entry(0, 1)) && db.contains(entry(4, 1)));
+    assert_eq!(tracks_of(&db, 4), Vec::<u32>::new(), "track 0 is skipped");
+    let err = db.to_pdb().unwrap_err();
+    assert_eq!(err, EncodeError::DanglingReference(expected[0]));
+    assert_eq!(
+        err.to_string(),
+        "dangling reference: PlaylistEntryPlaylist of PlaylistEntry { playlist: None, \
+         index: 1 } is 0"
+    );
+}
+
+#[test]
+fn a_parent_that_is_not_a_folder_is_refused_on_write() {
+    use crate::EncodeError;
+    let refused = EncodeError::ValueOutOfRange {
+        context: "pdb playlist parent_id",
+    };
+    let mut db = Database::new();
+    let a = db.add_playlist("A", None).unwrap();
+    let before = db.clone();
+    assert_eq!(db.add_playlist("B", Some(a)), Err(refused.clone()));
+    assert_eq!(db.add_folder("C", Some(a)), Err(refused.clone()));
+    assert_eq!(db, before, "nothing added");
+    let folder = db.add_folder("F", None).unwrap();
+    assert!(db.add_playlist("G", Some(folder)).is_ok());
+    // A loaded playlist inside a playlist loads, isn't dangling, and isn't written.
+    let nodes = vec![node_row(1, 0, 0, false, "A"), node_row(2, 1, 0, false, "B")];
+    let db = load(&[(ExportTable::PlaylistTree, nodes)]);
+    let parent = db.playlist(playlist_id(2)).and_then(Playlist::parent_id);
+    assert_eq!(parent, PlaylistId::new(1));
+    assert_eq!(db.dangling_references().count(), 0);
+    assert_eq!(db.to_pdb(), Err(refused));
 }
 
 #[test]

@@ -81,6 +81,12 @@ id! {
     ArtworkId(NonZeroU32, u32)
 }
 
+id! {
+    /// The id of a playlist tree row (table 7): a playlist or a folder. A parent of 0 is
+    /// the root.
+    PlaylistId(NonZeroU32, u32)
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -97,6 +103,7 @@ mod tests {
         assert_eq!(ColorId::new(0), None);
         assert_eq!(ArtworkId::new(0), None);
         assert_eq!(TrackId::new(0), None);
+        assert_eq!(PlaylistId::new(0), None);
     }
 
     #[test]
@@ -121,6 +128,7 @@ mod tests {
             prop_assert_eq!(KeyId::new(value).map(KeyId::get), Some(value));
             prop_assert_eq!(ArtworkId::new(value).map(ArtworkId::get), Some(value));
             prop_assert_eq!(TrackId::new(value).map(TrackId::get), Some(value));
+            prop_assert_eq!(PlaylistId::new(value).map(PlaylistId::get), Some(value));
             prop_assert_eq!(ColorId::new(small).map(ColorId::get), Some(small));
         }
     }

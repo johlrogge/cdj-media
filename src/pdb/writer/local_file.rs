@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{Database, ExportRow, ExportTable, Page, Pdb};
 use super::file::{file_sequence, next_unused_page, write_pdb};
-use super::fixed::{column_rows, default_colors};
+use super::fixed::{column_rows, default_colors, table_18_rows};
 use super::index::{EMPTY_ENTRY, build_index_page};
 use super::local::{TYPED, has_tombstones, load, tables};
 use super::{PageLinks, Transaction, build_data_page, build_page};
@@ -115,8 +115,9 @@ fn real_index_pages_rebuild() {
 
 /// The acceptance test of the file header builder: `Pdb::new` with the real `len_page`,
 /// table pointers and pages, and `next_unused_page` and `sequence` from their rules, gives
-/// back the real file byte for byte. Pages no chain reaches are passed as `None`, so they
-/// must be zero-filled.
+/// back the real file byte for byte, except for the header's `unknown2`: the old stick has
+/// 1, and `Pdb::new` writes a fresh export's 5. Pages no chain reaches are passed as `None`,
+/// so they must be zero-filled.
 #[test]
 fn real_file_rebuilds_from_its_pages_and_header_rules() {
     let Some(pdb) = load() else {
@@ -144,10 +145,16 @@ fn real_file_rebuilds_from_its_pages_and_header_rules() {
     .unwrap();
     let original = pdb.to_bytes().unwrap();
     let rebuilt = built.to_bytes().unwrap();
-    let at = rebuilt.iter().zip(&original).position(|(a, b)| a != b);
+    assert_eq!((pdb.unknown2(), built.unknown2()), (1, 5));
+    let mut rebuilt_as_old = rebuilt.clone();
+    rebuilt_as_old[0x10..0x14].copy_from_slice(&original[0x10..0x14]);
+    let at = rebuilt_as_old
+        .iter()
+        .zip(&original)
+        .position(|(a, b)| a != b);
     assert_eq!(at, None, "first difference");
     assert_eq!(rebuilt.len(), original.len());
-    assert_eq!(built, pdb);
+    assert_eq!(Pdb::from_bytes(&rebuilt_as_old).unwrap(), pdb);
 }
 
 /// The links of a real page, for its rebuild.
@@ -208,7 +215,18 @@ fn real_fixed_tables_hold_the_defaults() {
     let (built, real) = (built.to_bytes().unwrap(), columns.to_bytes().unwrap());
     let at = built.iter().zip(&real).position(|(a, b)| a != b);
     assert_eq!(at, None, "first difference of the column page");
-    eprintln!("colour and column pages: built from the defaults");
+
+    // Table 18 holds a fresh export's rows, byte for byte; table 17 does not (settings
+    // changed on this stick).
+    let table_18 = ExportTable::from_u32(18);
+    let [page] = data(table_18)[..] else {
+        panic!("one table 18 data page");
+    };
+    let built = build_page(len_page, 18, table_18_rows(), links_of(page), &whole).unwrap();
+    let (built, real) = (built.to_bytes().unwrap(), page.to_bytes().unwrap());
+    let at = built.iter().zip(&real).position(|(a, b)| a != b);
+    assert_eq!(at, None, "first difference of the table 18 page");
+    eprintln!("colour, column and table 18 pages: built from the defaults");
 }
 
 /// The typed rows of `table`, in chain order, with `index_shift` 0.

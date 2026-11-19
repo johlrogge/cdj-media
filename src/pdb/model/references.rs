@@ -1,7 +1,11 @@
 //! References between records, and the ones that don't resolve.
 
-use super::super::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, TrackId};
-use super::{Album, Track};
+use std::fmt;
+
+use super::super::{
+    AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, PlaylistId, TrackId,
+};
+use super::{Album, Playlist, Track};
 
 /// The id of a record of any table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -23,6 +27,15 @@ pub enum RecordId {
     Color(ColorId),
     /// An artwork.
     Artwork(ArtworkId),
+    /// A playlist or a folder.
+    Playlist(PlaylistId),
+    /// Entry `index` of a playlist's tracks: its place, from 1, as `to_pdb` writes it.
+    PlaylistEntry {
+        /// The playlist the entry names; `None` for an entry row whose playlist is 0.
+        playlist: Option<PlaylistId>,
+        /// The entry's place, from 1.
+        index: u32,
+    },
 }
 
 /// A reference field of a record.
@@ -51,9 +64,16 @@ pub enum Reference {
     TrackArtwork,
     /// [`Album::artist_id`].
     AlbumArtist,
+    /// [`Playlist::parent_id`].
+    PlaylistParent,
+    /// The track of a playlist entry.
+    PlaylistEntryTrack,
+    /// The playlist of a playlist entry.
+    PlaylistEntryPlaylist,
 }
 
-/// A reference that names a record the database doesn't have.
+/// A reference that names a record the database doesn't have, or a required reference
+/// that is 0 (a playlist entry's track or playlist).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub struct Dangling {
@@ -61,8 +81,19 @@ pub struct Dangling {
     pub from: RecordId,
     /// The reference field.
     pub field: Reference,
-    /// The id it names.
-    pub id: RecordId,
+    /// The id it names; `None` for a reference of 0 where one is required.
+    pub id: Option<RecordId>,
+}
+
+impl fmt::Display for Dangling {
+    /// `TrackAlbum of Track(TrackId(3)) names a missing Album(AlbumId(7))`, or `… is 0`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?} of {:?} ", self.field, self.from)?;
+        match self.id {
+            Some(id) => write!(f, "names a missing {id:?}"),
+            None => f.write_str("is 0"),
+        }
+    }
 }
 
 impl Track {
@@ -93,6 +124,16 @@ impl Album {
         [(
             Reference::AlbumArtist,
             self.artist_id().map(RecordId::Artist),
+        )]
+    }
+}
+
+impl Playlist {
+    /// Every reference field, with the id it names, if set.
+    pub fn references(&self) -> [(Reference, Option<RecordId>); 1] {
+        [(
+            Reference::PlaylistParent,
+            self.parent_id().map(RecordId::Playlist),
         )]
     }
 }

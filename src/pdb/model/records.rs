@@ -1,8 +1,8 @@
 //! The model's records: the domain values of the typed rows, text as `String`.
 
 use super::super::{
-    AlbumId, ArtistId, ArtworkId, ColorId, ExportTable, FileType, GenreId, KeyId, LabelId, RawRow,
-    TrackFields, TrackId, rows,
+    AlbumId, ArtistId, ArtworkId, ColorId, ExportTable, FileType, GenreId, KeyId, LabelId,
+    PlaylistId, RawRow, TrackFields, TrackId, rows,
 };
 use crate::encoding::{Bpm, DeviceSqlString};
 use crate::error::DecodeError;
@@ -439,6 +439,85 @@ id_text_record! {
     Color(ColorId, name) from Color in Colors,
     id at 5, "pdb color id",
     "The name."
+}
+
+/// A playlist or a folder of the playlist tree. A playlist's tracks are
+/// [`Database::playlist_tracks`](super::Database::playlist_tracks).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Playlist {
+    id: PlaylistId,
+    parent_id: Option<PlaylistId>,
+    sort_order: u32,
+    is_folder: bool,
+    name: String,
+}
+
+impl Playlist {
+    /// The playlist or folder with id `id`.
+    pub(super) fn new(
+        id: PlaylistId,
+        parent_id: Option<PlaylistId>,
+        sort_order: u32,
+        is_folder: bool,
+        name: &str,
+    ) -> Self {
+        Self {
+            id,
+            parent_id,
+            sort_order,
+            is_folder,
+            name: name.to_owned(),
+        }
+    }
+
+    copy_getters! {
+        /// The id.
+        id: PlaylistId,
+        /// The folder it is in; `None` at the root.
+        parent_id: Option<PlaylistId>,
+        /// Its place among its parent's children, from 0.
+        sort_order: u32,
+        /// Whether it is a folder, which holds playlists and folders but no tracks.
+        is_folder: bool,
+    }
+    str_getters! {
+        /// The name.
+        name,
+    }
+
+    /// The playlist's tree row.
+    pub(super) fn to_row(&self) -> rows::PlaylistNode {
+        let Self {
+            id,
+            parent_id,
+            sort_order,
+            is_folder,
+            ..
+        } = *self;
+        rows::PlaylistNode::new(id, parent_id, sort_order, is_folder, &self.name)
+    }
+}
+
+impl FromRow for Playlist {
+    type Id = PlaylistId;
+    const TABLE: ExportTable = ExportTable::PlaylistTree;
+    const ID_FIELD: (u64, &'static str) = (0x0c, "pdb playlist id");
+
+    fn decode(raw: &RawRow<'_>) -> Result<Self, DecodeError> {
+        let row = rows::PlaylistNode::decode(raw)?;
+        Ok(Self {
+            id: row.id(),
+            parent_id: row.parent_id(),
+            sort_order: row.sort_order(),
+            is_folder: row.is_folder(),
+            name: text(row.name()),
+        })
+    }
+
+    fn id(&self) -> PlaylistId {
+        self.id
+    }
 }
 
 id_text_record! {
