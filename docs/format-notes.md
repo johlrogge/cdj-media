@@ -436,3 +436,21 @@ old stick too. Checked by `src/pdb/writer/local_fresh.rs` (pages) and
   - `rekordbox/exportLibrary.db`: 118,784 bytes (29 pages of 4,096), not the SQLite magic.
   - `rekordbox/exportExt.pdb`: 9 tables (types 0–8), 18 pages; types 3, 4 and 7 have 2 pages
     each (24, 1 and 1 present rows), the others an index page only.
+
+## Artwork paths (both fixtures)
+
+Checked by `tests/artwork_local.rs`, shapes only (letters masked outside the prefix).
+
+- **Scheme:** every artwork row's path on both sticks is
+  `/PIONEER/Artwork/{id / 20 + 1:05}/a{id}.jpg`, with `id` the row's artwork id in decimal
+  without padding. Directory `00001` holds ids 1 to 19 and each later directory 20 ids
+  (`00002` holds 20 to 39), so the directory is `id / 20 + 1`, not `(id - 1) / 20 + 1`.
+  It follows the id, not the row's rank: with the rank in place of the id only 278 of the
+  real stick's 787 paths match.
+- **rekordbox-hw1:** 5 rows (one per track with artwork), all in `00001`.
+- **real-stick:** 787 rows, ids 1 to 835 with gaps, in 42 directories (`00001` to `00042`),
+  19 or 20 rows in most and fewer where ids are missing.
+- **No `_m` variant** appears in any row. Neither fixture holds the image files (no file
+  under `PIONEER/Artwork/`), so the files on disk, `_m` thumbnails included, can't be
+  checked here.
+- `layout::ArtworkPath::for_artwork` gives back all 792 paths.

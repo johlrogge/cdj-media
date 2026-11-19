@@ -1,4 +1,4 @@
-//! The stick's path layout: where audio and analysis files go.
+//! The stick's path layout: where audio, analysis and artwork files go.
 //!
 //! Pure path logic: nothing here touches a file system.
 //!
@@ -7,13 +7,21 @@
 //!   track row's file path (slot 20). Its last component is the filename (slot 19).
 //! - [`AnlzPath`]: a track's analysis files under `/PIONEER/USBANLZ/`, derived from the
 //!   track id. Its `.DAT` path is the analysis path (slot 14).
+//! - [`ArtworkPath`]: an artwork image under `/PIONEER/Artwork/`, derived from the artwork
+//!   id: what the artwork row holds.
+//! - [`ContentPathAllocator`]: makes the content paths of one stick distinct, as FAT32
+//!   compares them (ADR-010).
 //! - [`audio_path_tag`]: the `PPTH` tag of the analysis files, which repeats the file path.
 
+mod allocator;
 mod anlz;
+mod artwork;
 mod content;
 mod stick_path;
 
+pub use allocator::ContentPathAllocator;
 pub use anlz::AnlzPath;
+pub use artwork::ArtworkPath;
 pub use content::ContentPath;
 pub use stick_path::{MAX_COMPONENT_UNITS, MAX_PATH_UNITS, PathError, StickPath};
 

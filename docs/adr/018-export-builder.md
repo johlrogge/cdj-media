@@ -51,11 +51,14 @@ Paths come from the library, never from the caller:
   collision allocator, which is pure and stateful, runs in input order, and is built in this
   slice.
 - **Analysis:** `AnlzPath::for_track(id)` (ADR-010).
-- **Artwork:** `layout::ArtworkPath`, derived from the artwork id.
-  - The scheme is measured on the fixture's artwork rows before it is implemented, printing
-    shapes only.
-  - If it can't be measured, it falls back to rekordbox's documented
-    `/PIONEER/Artwork/00001/a{id}.jpg`.
+- **Collisions:** `layout::ContentPathAllocator` applies ADR-010's rule in input order. Case
+  folding is per character and one-for-one: a character folds to its upper case only when
+  that is a single character, so `ö` = `Ö` but `ß` ≠ `SS`. This mimics FAT's upcase table.
+  The builder allocates a track's path before it inserts the row, so slots 19/20, PPTH and
+  the disk all get the allocated path.
+- **Artwork:** `layout::ArtworkPath::for_artwork(id)` gives
+  `/PIONEER/Artwork/{id / 20 + 1:05}/a{id}.jpg`. It was measured on both fixtures, and all
+  792 rows match (format notes, "Artwork paths").
   - Each track with artwork gets its own artwork row (ADR-016).
   - The bytes are written as given. Only the JPEG SOI marker is checked, and nothing is
     resized (a VISION non-goal).
@@ -167,7 +170,6 @@ The test checks two things:
 
 Documented differences:
 - slot 14 is derived from the id, not hashed;
-- the artwork paths, if the measured scheme differs;
 - the duration, if `floor(ms/1000)` of the supplied length differs from the row.
 
 A second test on synthetic data covers `Constant` and `Flat`.
