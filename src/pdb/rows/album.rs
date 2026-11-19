@@ -89,10 +89,6 @@ impl Album {
 
     /// Replaces `index_shift` (offset 2); the page writer sets it.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer sets it from slice 7d on")
-    )]
     pub(crate) fn with_index_shift(mut self, index_shift: u16) -> Self {
         self.index_shift = index_shift;
         self
@@ -196,10 +192,6 @@ impl Album {
     /// rekordbox's heap layout sizes an album row by (see [`ExportRow::heap_footprint`]).
     ///
     /// [`ExportRow::heap_footprint`]: super::ExportRow::heap_footprint
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
-    )]
     pub(super) fn far_len(&self) -> usize {
         MARKER_AT.saturating_add(self.tail.far_len())
     }

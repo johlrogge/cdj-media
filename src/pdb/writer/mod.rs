@@ -102,6 +102,10 @@ pub(crate) enum Transaction {
     /// rows, the index 0, and each `tranrf` equals its `rowpf`.
     WholePage,
     /// Stored values, one `tranrf` per row group, for rebuilding a real page.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the tests rebuild real pages")
+    )]
     Recorded {
         row_count: u16,
         row_index: u16,
@@ -283,6 +287,9 @@ pub(crate) fn pack_footprints(
 
 mod file;
 mod fixed;
+
+pub(crate) use file::write_pdb;
+pub(crate) use fixed::default_colors;
 mod index;
 #[cfg(test)]
 mod local;

@@ -149,10 +149,6 @@ impl Pdb {
     ///
     /// [`EncodeError::LengthOverflow`] (`"pdb num_tables"`) when the table pointers do not
     /// fit page 0, and (`"pdb len_page"`) when `len_page` is below 0x28.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
-    )]
     pub(crate) fn new(
         len_page: u32,
         next_unused_page: u32,

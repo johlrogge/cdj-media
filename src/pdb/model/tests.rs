@@ -224,6 +224,23 @@ fn a_track_row_maps_to_its_domain_values() {
 }
 
 #[test]
+fn a_loaded_track_lowers_to_the_fields_it_was_built_from() {
+    let empty = TrackFields {
+        isrc: String::new(),
+        date_added: String::new(),
+        release_date: String::new(),
+        analysis_date: String::new(),
+        publish_track_info: false,
+        ..full_fields()
+    };
+    for fields in [full_fields(), empty, TrackFields::default()] {
+        let db = load(&with_tracks(vec![track_row(8, fields.clone())]));
+        let track = db.track(TrackId::new(8).unwrap()).unwrap();
+        assert_eq!(track.to_fields(), fields);
+    }
+}
+
+#[test]
 fn small_table_rows_map_to_their_domain_values() {
     let db = load(&small_tables());
     assert_eq!(db.tracks().len(), 0);
@@ -622,6 +639,289 @@ fn contains_finds_records_of_every_table() {
         assert!(!db.contains(id), "{id:?}");
     }
     assert_eq!(db.dangling_references().count(), 0);
+}
+
+#[test]
+fn a_new_database_holds_only_the_default_colours() {
+    let db = Database::new();
+    let counts = [
+        db.tracks().len(),
+        db.artists().len(),
+        db.albums().len(),
+        db.genres().len(),
+        db.labels().len(),
+        db.keys().len(),
+        db.artworks().len(),
+    ];
+    assert_eq!(counts, [0; 7]);
+    let colors: Vec<(u16, &str)> = db.colors().map(|c| (c.id().get(), c.name())).collect();
+    assert_eq!(
+        colors,
+        [
+            (1, "Pink"),
+            (2, "Red"),
+            (3, "Orange"),
+            (4, "Yellow"),
+            (5, "Green"),
+            (6, "Aqua"),
+            (7, "Blue"),
+            (8, "Purple")
+        ]
+    );
+    assert_eq!(Database::default(), db);
+}
+
+#[test]
+fn names_are_found_or_inserted_with_the_next_id() {
+    let mut db = Database::new();
+    let bjork = db.find_or_insert_artist("Björk");
+    assert_eq!(bjork, ArtistId::new(1), "the first id is 1");
+    assert_eq!(db.find_or_insert_artist("Björk"), bjork, "found");
+    // Exact names: case-sensitive and not trimmed.
+    assert_eq!(db.find_or_insert_artist("björk"), ArtistId::new(2));
+    assert_eq!(db.find_or_insert_artist("Björk "), ArtistId::new(3));
+    let names: Vec<(u32, &str)> = db.artists().map(|a| (a.id().get(), a.name())).collect();
+    assert_eq!(names, [(1, "Björk"), (2, "björk"), (3, "Björk ")]);
+
+    let genre = db.find_or_insert_genre("Pop");
+    assert_eq!(genre, GenreId::new(1));
+    assert_eq!(db.find_or_insert_genre("House"), GenreId::new(2));
+    assert_eq!(db.find_or_insert_genre("Pop"), genre);
+    let label = db.find_or_insert_label("One Little");
+    assert_eq!(label, LabelId::new(1));
+    assert_eq!(db.find_or_insert_label("One Little"), label);
+    let key = db.find_or_insert_key("8A");
+    assert_eq!(key, KeyId::new(1));
+    assert_eq!(db.find_or_insert_key("Am"), KeyId::new(2));
+    assert_eq!(db.find_or_insert_key("8A"), key);
+    let artwork = db.find_or_insert_artwork("/PIONEER/Artwork/00001/a1.jpg");
+    assert_eq!(artwork, ArtworkId::new(1));
+    assert_eq!(
+        db.find_or_insert_artwork("/PIONEER/Artwork/00001/a1.jpg"),
+        artwork
+    );
+    let counts = [
+        db.genres().len(),
+        db.labels().len(),
+        db.keys().len(),
+        db.artworks().len(),
+    ];
+    assert_eq!(counts, [2, 1, 2, 1]);
+    let label = db.label(LabelId::new(1).unwrap()).unwrap();
+    assert_eq!(label.name(), "One Little");
+}
+
+#[test]
+fn an_empty_name_is_no_record() {
+    let mut db = Database::new();
+    assert_eq!(db.find_or_insert_artist(""), None);
+    assert_eq!(db.find_or_insert_album("", ArtistId::new(1)), None);
+    assert_eq!(db.find_or_insert_genre(""), None);
+    assert_eq!(db.find_or_insert_label(""), None);
+    assert_eq!(db.find_or_insert_key(""), None);
+    assert_eq!(db.find_or_insert_artwork(""), None);
+    assert_eq!(db, Database::new());
+}
+
+#[test]
+fn albums_are_found_by_name_and_album_artist() {
+    let mut db = Database::new();
+    let a = db.find_or_insert_artist("A");
+    let b = db.find_or_insert_artist("B");
+    let hits_a = db.find_or_insert_album("Hits", a);
+    assert_eq!(hits_a, AlbumId::new(1));
+    assert_eq!(db.find_or_insert_album("Hits", a), hits_a);
+    assert_eq!(db.find_or_insert_album("Hits", b), AlbumId::new(2));
+    assert_eq!(db.find_or_insert_album("Hits", None), AlbumId::new(3));
+    assert_eq!(db.find_or_insert_album("Hits", None), AlbumId::new(3));
+    let albums: Vec<(u32, &str, Option<ArtistId>)> = db
+        .albums()
+        .map(|album| (album.id().get(), album.name(), album.artist_id()))
+        .collect();
+    assert_eq!(
+        albums,
+        [(1, "Hits", a), (2, "Hits", b), (3, "Hits", None)],
+        "one album per album artist"
+    );
+}
+
+#[test]
+fn a_loaded_database_finds_its_names_and_continues_after_its_last_id() {
+    let mut db = load(&small_tables());
+    assert_eq!(db.find_or_insert_artist("Björk"), ArtistId::new(2));
+    assert_eq!(db.find_or_insert_artist("Sugarcubes"), ArtistId::new(6));
+    assert_eq!(
+        db.find_or_insert_album("Homogenic", ArtistId::new(2)),
+        AlbumId::new(30)
+    );
+    assert_eq!(
+        db.find_or_insert_album("Homogenic", ArtistId::new(3)),
+        AlbumId::new(31)
+    );
+    assert_eq!(db.find_or_insert_genre("Pop"), GenreId::new(10));
+    assert_eq!(db.find_or_insert_label("Other"), LabelId::new(41));
+    assert_eq!(db.find_or_insert_key("8A"), KeyId::new(50));
+    assert_eq!(db.find_or_insert_artwork("/a2.jpg"), ArtworkId::new(71));
+}
+
+#[test]
+fn after_the_highest_id_the_lowest_free_one_is_taken() {
+    let artists = vec![artist_row(1, "First"), artist_row(u32::MAX, "Last")];
+    let mut db = load(&[(ExportTable::Artists, artists)]);
+    assert_eq!(db.find_or_insert_artist("New"), ArtistId::new(2));
+    let names: Vec<(u32, &str)> = db.artists().map(|a| (a.id().get(), a.name())).collect();
+    assert_eq!(names, [(1, "First"), (2, "New"), (u32::MAX, "Last")]);
+}
+
+#[test]
+fn tracks_are_added_with_the_next_id() {
+    let mut db = load(&with_tracks(vec![track_row(8, full_fields())]));
+    let first = db.add_track(full_fields()).unwrap();
+    let second = db.add_track(TrackFields::default()).unwrap();
+    assert_eq!((first.get(), second.get()), (9, 10));
+    let track = |id| db.track(TrackId::new(id).unwrap()).unwrap().to_fields();
+    assert_eq!(track(9), full_fields());
+    assert_eq!(track(10), TrackFields::default());
+    let mut db = Database::new();
+    assert_eq!(db.add_track(full_fields()).map(TrackId::get), Ok(1));
+}
+
+#[test]
+fn a_track_the_writer_cannot_encode_is_not_added() {
+    use crate::EncodeError;
+    let mut db = Database::new();
+    let isrc = TrackFields {
+        isrc: "Björk".into(),
+        ..full_fields()
+    };
+    let color = TrackFields {
+        color_id: ColorId::new(0x100),
+        ..full_fields()
+    };
+    let out_of_range = |context| Err(EncodeError::ValueOutOfRange { context });
+    assert_eq!(db.add_track(isrc), out_of_range("DeviceSQL ISRC text"));
+    assert_eq!(db.add_track(color), out_of_range("pdb track color_id"));
+    assert_eq!(db, Database::new());
+}
+
+/// A database built through the find-or-insert API: two tracks sharing an artist, an
+/// album, a genre and a label, with keys and artwork of their own.
+fn built() -> Database {
+    let mut db = Database::new();
+    for (title, key, artwork) in [("Jóga", "8A", "/a1.jpg"), ("Hunter", "Am", "/a2.jpg")] {
+        let artist_id = db.find_or_insert_artist("Björk");
+        let fields = TrackFields {
+            title: title.into(),
+            artist_id,
+            composer_id: db.find_or_insert_artist("Composer"),
+            original_artist_id: db.find_or_insert_artist("Björk"),
+            remixer_id: db.find_or_insert_artist("Remixer"),
+            album_id: db.find_or_insert_album("Homogenic", artist_id),
+            genre_id: db.find_or_insert_genre("Pop"),
+            label_id: db.find_or_insert_label("One Little"),
+            key_id: db.find_or_insert_key(key),
+            artwork_id: db.find_or_insert_artwork(artwork),
+            color_id: ColorId::new(6),
+            ..full_fields()
+        };
+        db.add_track(fields).unwrap();
+    }
+    db
+}
+
+/// The raw values of `ids`.
+fn raw<I: Into<u32>>(ids: impl Iterator<Item = I>) -> Vec<u32> {
+    ids.map(Into::into).collect()
+}
+
+/// `db` written with `to_pdb`, encoded, decoded and loaded again.
+fn written_and_loaded(db: &Database) -> Database {
+    let pdb = db.to_pdb().expect("to_pdb");
+    assert_eq!(pdb.len_page(), 4096);
+    let bytes = pdb.to_bytes().unwrap();
+    Database::from_pdb(&Pdb::from_bytes(&bytes).unwrap()).expect("the written file loads")
+}
+
+#[test]
+fn a_built_database_survives_to_pdb_and_back() {
+    let db = built();
+    assert_eq!(raw(db.tracks().map(|t| t.id())), [1, 2]);
+    assert_eq!(raw(db.artists().map(|a| a.id())), [1, 2, 3]);
+    assert_eq!(raw(db.albums().map(|a| a.id())), [1]);
+    assert_eq!(raw(db.genres().map(|g| g.id())), [1]);
+    assert_eq!(raw(db.labels().map(|l| l.id())), [1]);
+    assert_eq!(raw(db.keys().map(|k| k.id())), [1, 2]);
+    assert_eq!(raw(db.artworks().map(|a| a.id())), [1, 2]);
+    assert_eq!(db.dangling_references().count(), 0);
+    assert_eq!(written_and_loaded(&db), db);
+    assert_eq!(written_and_loaded(&Database::new()), Database::new());
+}
+
+#[test]
+fn a_loaded_database_writes_its_ids_back_unchanged() {
+    let colors = crate::pdb::writer::default_colors();
+    let mut tables = with_tracks(vec![
+        track_row(20, full_fields()),
+        track_row(8, TrackFields::default()),
+    ]);
+    for (table, rows) in &mut tables {
+        if *table == ExportTable::Colors {
+            *rows = colors.clone();
+        }
+    }
+    let db = load(&tables);
+    assert_eq!(db.colors().len(), 8, "guards the test");
+    assert_eq!(written_and_loaded(&db), db);
+}
+
+#[test]
+fn a_renamed_colour_keeps_its_name_through_to_pdb() {
+    // The track references colour 6, renamed from "Aqua".
+    let mut colors = crate::pdb::writer::default_colors();
+    colors[5] = color_row(6, "Teal");
+    let mut tables = with_tracks(vec![track_row(8, full_fields())]);
+    for (table, rows) in &mut tables {
+        if *table == ExportTable::Colors {
+            *rows = colors.clone();
+        }
+    }
+    let db = load(&tables);
+    let back = written_and_loaded(&db);
+    let teal = back.color(ColorId::new(6).unwrap()).map(Color::name);
+    assert_eq!(teal, Some("Teal"));
+    assert_eq!(back, db);
+}
+
+#[test]
+fn a_dangling_reference_fails_to_pdb() {
+    use crate::EncodeError;
+    let mut db = built();
+    db.add_track(TrackFields {
+        album_id: AlbumId::new(7),
+        ..TrackFields::default()
+    })
+    .unwrap();
+    let dangling = Dangling {
+        from: RecordId::Track(TrackId::new(3).unwrap()),
+        field: Reference::TrackAlbum,
+        id: RecordId::Album(AlbumId::new(7).unwrap()),
+    };
+    let err = db.to_pdb().unwrap_err();
+    assert_eq!(err, EncodeError::DanglingReference(dangling));
+    assert_eq!(
+        err.to_string(),
+        "dangling reference: TrackAlbum of Track(TrackId(3)) names a missing \
+         Album(AlbumId(7))"
+    );
+    // A loaded album whose artist is missing.
+    let db = load(&[(ExportTable::Albums, vec![album_row(30, "Lost", 99)])]);
+    let dangling = Dangling {
+        from: RecordId::Album(AlbumId::new(30).unwrap()),
+        field: Reference::AlbumArtist,
+        id: RecordId::Artist(ArtistId::new(99).unwrap()),
+    };
+    let expected = EncodeError::DanglingReference(dangling);
+    assert_eq!(db.to_pdb(), Err(expected));
 }
 
 #[test]

@@ -93,10 +93,6 @@ impl NameTail {
 
     /// The length the tail would have in the far layout, without a gap: the marker and name
     /// offset fields and the name.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
-    )]
     pub(super) fn far_len(&self) -> usize {
         FAR_FIELDS_LEN.saturating_add(self.name.encoded_len())
     }
