@@ -96,3 +96,7 @@ pub(crate) const COLOR_UNKNOWN1: u32 = 0;
 /// Colour `unknown3` (offset 7): 0 in all 8 rows. Checked by
 /// `real_stick_row_defaults_are_modal`.
 pub(crate) const COLOR_UNKNOWN3: u8 = 0;
+
+/// Playlist tree `unknown` (offset 4): 0 in all 32 rows of the real stick and the one row of
+/// the fresh export. Checked by `writer::local::real_playlist_rows_round_trip`.
+pub(crate) const PLAYLIST_UNKNOWN: u32 = 0;

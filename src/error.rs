@@ -135,7 +135,7 @@ pub enum EncodeError {
     },
     /// A record of the database being written names a record it doesn't have, which a
     /// written file must not (ADR-009).
-    #[error("dangling reference: {:?} of {:?} names a missing {:?}", .0.field, .0.from, .0.id)]
+    #[error("dangling reference: {0}")]
     DanglingReference(Dangling),
 }
 

@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use super::super::{ExportRow, ExportTable, Page, PageBody, Pdb, RawRow, TablePointer};
 use super::file::{file_sequence, next_unused_page, write_pdb};
-use super::fixed::{column_rows, default_colors};
+use super::fixed::{column_rows, default_colors, table_17_rows, table_18_rows};
 use super::index::{EMPTY_ENTRY, build_index_page};
 use super::local::{TYPED, has_tombstones, links_of, load, load_from, slots, transaction_of};
 use super::{Transaction, build_data_page, build_page, pack, page_sizes};
@@ -90,7 +90,7 @@ fn pointer_fields(t: &TablePointer) -> [u32; 4] {
 /// The file header and the table pointers of the fresh export, against the rules
 /// `write_pdb` follows (ADR-012).
 ///
-/// - The header's `unknown2` (0x10) is 5, where the old stick has 1 and `Pdb::new` writes 1.
+/// - The header's `unknown2` (0x10) is 5, as `Pdb::new` writes it; the old stick has 1.
 /// - Its `sequence` is 49, 4 more than the highest page `sequence` (45), not 1 more.
 /// - `next_unused_page` (55) is one past the highest `empty_candidate`, as the rule says.
 #[test]
@@ -487,6 +487,8 @@ fn fresh_export_data_pages() {
         (3, true, false),
         (5, true, false),
         (6, true, true),
+        (7, true, true),
+        (8, true, false),
         (13, true, false),
     ];
     pins.eq(
@@ -608,10 +610,11 @@ fn short_rows(pdb: &Pdb, t: u32) -> Vec<Vec<u8>> {
     out
 }
 
-/// The fixed tables: colours and columns are byte for byte `write_pdb`'s; tables 17 and 18,
-/// which `write_pdb` leaves empty, have rows in a fresh export, written whole at creation
-/// (sequences 4 and 5). Table 18 is the old stick's, byte for byte; table 17 shares 13 of
-/// its 22 rows with the old stick, so it holds settings that changed on the old stick.
+/// The fixed tables: colours and columns are byte for byte `write_pdb`'s; tables 17 and 18
+/// have rows in a fresh export, written whole at creation (sequences 4 and 5), which
+/// `write_pdb` writes as fixed rows (see `fresh_export_tables_17_and_18_are_the_built_defaults`).
+/// Table 18 is the old stick's, byte for byte; table 17 shares 13 of its 22 rows with the
+/// old stick, so it holds settings that changed on the old stick.
 #[test]
 fn fresh_export_fixed_tables() {
     let Some(pdb) = load_from(EXPORT) else {
@@ -657,6 +660,39 @@ fn fresh_export_fixed_tables() {
         (shared17, fresh17.len(), heaps(&pdb) == heaps(&old)),
         (13, 22, true),
     );
+    pins.check();
+}
+
+/// The rows of every page of the table of type `t`, as encoded rows of 8 bytes.
+fn eight_byte_rows(pdb: &Pdb, t: u32) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for page in data_pages(pdb, t) {
+        out.extend(page.rows().map(|r| r.bytes()[..8].to_vec()));
+    }
+    out
+}
+
+/// Tables 17 and 18 are rekordbox's fixed rows (`fixed::table_17_rows`,
+/// `fixed::table_18_rows`): the page built from them with the fresh export's links and
+/// whole-page transaction values equals the fresh export's page byte for byte.
+#[test]
+fn fresh_export_tables_17_and_18_are_the_built_defaults() {
+    let Some(pdb) = load_from(EXPORT) else {
+        return;
+    };
+    let len_page = pdb.len_page() as usize;
+    let mut pins = Pins::default();
+    let whole = Transaction::WholePage;
+    for (t, rows) in [(17, table_17_rows()), (18, table_18_rows())] {
+        let built: Vec<Vec<u8>> = rows.iter().map(|r| r.bytes.clone()).collect();
+        pins.eq(&format!("table {t} rows"), eight_byte_rows(&pdb, t), built);
+        let [page] = data_pages(&pdb, t)[..] else {
+            panic!("one data page");
+        };
+        let built = build_page(len_page, t, rows, links_of(page), &whole);
+        let equal = built.and_then(|p| p.to_bytes()) == page.to_bytes();
+        pins.eq(&format!("table {t} page equals the built one"), equal, true);
+    }
     pins.check();
 }
 
@@ -785,10 +821,11 @@ fn describe(a: &[u8], b: &[u8], index: bool) -> String {
 }
 
 /// The fresh export against `write_pdb` from its own typed rows, page by page. The same: the
-/// empty index pages and the zero pages of the tables both leave empty. Different: links and
-/// sequences elsewhere, the transaction fields, the track pages, the index and data pages of
-/// the playlist, history and 17/18 tables, which `write_pdb` leaves empty, and every page
-/// from 40 on, past the end of ours.
+/// empty index pages (playlist tree, playlist entries, tables 17 and 18 included) and the
+/// zero pages of the tables both leave empty. Different: links and sequences elsewhere (the
+/// playlist tree, colour, column, 17 and 18 data pages only there), the transaction fields,
+/// the track pages, the index and data pages of history, which `write_pdb` leaves empty, and
+/// every page from 40 on, past the end of ours.
 #[test]
 fn fresh_export_against_write_pdb() {
     let Some(pdb) = load_from(EXPORT) else {
@@ -802,7 +839,7 @@ fn fresh_export_against_write_pdb() {
     pins.eq(
         "ours: pages, (next_unused_page, sequence, unknown2)",
         (ours.page_count(), header),
-        (40, (49, 10, 1)),
+        (40, (53, 14, 5)),
     );
     let count = u32::try_from(pdb.page_count().max(ours.page_count())).unwrap();
     let mut same = Vec::new();
@@ -821,7 +858,8 @@ fn fresh_export_against_write_pdb() {
         differ.push((i, how));
     }
     let pinned = vec![
-        3, 5, 7, 9, 10, 11, 13, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 33,
+        3, 5, 7, 9, 10, 11, 13, 15, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 33, 35,
+        37,
     ];
     pins.eq("pages identical", same, pinned);
     let pinned: Vec<(u32, String)> = [
@@ -832,16 +870,12 @@ fn fresh_export_against_write_pdb() {
         (8, "next seq transaction body"),
         (12, "next seq transaction body"),
         (14, "next seq"),
-        (15, "body"),
-        (16, "zero in ours"),
-        (17, "body"),
-        (18, "zero in ours"),
+        (16, "next seq"),
+        (18, "next seq transaction body"),
         (28, "next seq transaction body"),
         (34, "next seq"),
-        (35, "body"),
-        (36, "zero in ours"),
-        (37, "body"),
-        (38, "zero in ours"),
+        (36, "next seq"),
+        (38, "next seq"),
         (39, "seq body"),
     ]
     .into_iter()

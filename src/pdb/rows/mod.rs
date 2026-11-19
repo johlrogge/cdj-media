@@ -1,22 +1,25 @@
-//! Typed rows of the `export.pdb` track table and small tables (ADR-005, ADR-006,
-//! ADR-007).
+//! Typed rows of the `export.pdb` track table, the small tables and the playlist tables
+//! (ADR-005, ADR-006, ADR-007).
 
 mod album;
 mod artist;
 mod inline;
+mod playlist;
 mod tail;
 mod track;
 
 pub use album::Album;
 pub use artist::Artist;
 pub use inline::{Artwork, Color, Genre, Key, Label};
+pub use playlist::{PlaylistEntry, PlaylistNode};
 pub use track::{FileType, OtherFileType, Track, TrackFields, TrackString};
 
 use super::{ExportTable, RawRow};
 use crate::error::{DecodeError, EncodeError};
 use tail::{Layout, NameTail, TailContexts, read_id};
 
-/// A typed row of the track table or one of the small `export.pdb` tables.
+/// A typed row of the track table, one of the small `export.pdb` tables or a playlist
+/// table.
 ///
 /// Each variant's row ends after its last string; what follows it in the heap (zero
 /// padding in rekordbox's files) belongs to the page, not to the row.
@@ -39,11 +42,15 @@ pub enum ExportRow {
     Color(Color),
     /// A row of [`ExportTable::Artwork`].
     Artwork(Artwork),
+    /// A row of [`ExportTable::PlaylistTree`].
+    PlaylistNode(PlaylistNode),
+    /// A row of [`ExportTable::PlaylistEntries`].
+    PlaylistEntry(PlaylistEntry),
 }
 
 impl ExportRow {
     /// Decodes `row` as a row of `table`; `None` for tables whose rows are not typed yet
-    /// (playlists, history and the unnamed tables).
+    /// (history, columns and the unnamed tables).
     ///
     /// # Errors
     ///
@@ -58,9 +65,9 @@ impl ExportRow {
             ExportTable::Keys => Self::Key(Key::decode(row)?),
             ExportTable::Colors => Self::Color(Color::decode(row)?),
             ExportTable::Artwork => Self::Artwork(Artwork::decode(row)?),
-            ExportTable::PlaylistTree
-            | ExportTable::PlaylistEntries
-            | ExportTable::HistoryPlaylists
+            ExportTable::PlaylistTree => Self::PlaylistNode(PlaylistNode::decode(row)?),
+            ExportTable::PlaylistEntries => Self::PlaylistEntry(PlaylistEntry::decode(row)?),
+            ExportTable::HistoryPlaylists
             | ExportTable::HistoryEntries
             | ExportTable::Columns
             | ExportTable::History
@@ -83,6 +90,8 @@ impl ExportRow {
             Self::Key(row) => row.encode(),
             Self::Color(row) => row.encode(),
             Self::Artwork(row) => row.encode(),
+            Self::PlaylistNode(row) => row.encode(),
+            Self::PlaylistEntry(row) => row.encode(),
         }
     }
 
@@ -97,6 +106,8 @@ impl ExportRow {
             Self::Key(_) => ExportTable::Keys,
             Self::Color(_) => ExportTable::Colors,
             Self::Artwork(_) => ExportTable::Artwork,
+            Self::PlaylistNode(_) => ExportTable::PlaylistTree,
+            Self::PlaylistEntry(_) => ExportTable::PlaylistEntries,
         }
     }
 
@@ -106,9 +117,13 @@ impl ExportRow {
             Self::Track(row) => Some(row.index_shift()),
             Self::Artist(row) => Some(row.index_shift()),
             Self::Album(row) => Some(row.index_shift()),
-            Self::Genre(_) | Self::Label(_) | Self::Key(_) | Self::Color(_) | Self::Artwork(_) => {
-                None
-            }
+            Self::Genre(_)
+            | Self::Label(_)
+            | Self::Key(_)
+            | Self::Color(_)
+            | Self::Artwork(_)
+            | Self::PlaylistNode(_)
+            | Self::PlaylistEntry(_) => None,
         }
     }
 
@@ -119,17 +134,21 @@ impl ExportRow {
             Self::Track(row) => Self::Track(row.with_index_shift(index_shift)),
             Self::Artist(row) => Self::Artist(row.with_index_shift(index_shift)),
             Self::Album(row) => Self::Album(row.with_index_shift(index_shift)),
-            Self::Genre(_) | Self::Label(_) | Self::Key(_) | Self::Color(_) | Self::Artwork(_) => {
-                self
-            }
+            Self::Genre(_)
+            | Self::Label(_)
+            | Self::Key(_)
+            | Self::Color(_)
+            | Self::Artwork(_)
+            | Self::PlaylistNode(_)
+            | Self::PlaylistEntry(_) => self,
         }
     }
 
     /// How many heap bytes the row takes in a page laid out as rekordbox does: the row and
     /// the zero padding before the next row, which starts at a multiple of 4.
     ///
-    /// - Genre, label, key, colour and artwork rows: the row's length rounded up to a
-    ///   multiple of 4.
+    /// - Genre, label, key, colour, artwork, playlist tree and playlist entry rows: the row's
+    ///   length rounded up to a multiple of 4.
     /// - Artist and album rows: the length the row would have in the far layout, rounded up
     ///   to a multiple of 4, plus 4.
     /// - Track rows: the length the row would have if every string started at a multiple of
@@ -151,9 +170,13 @@ impl ExportRow {
             Self::Track(row) => (row.aligned_len(), TRAILER),
             Self::Artist(row) => (row.far_len(), TRAILER),
             Self::Album(row) => (row.far_len(), TRAILER),
-            Self::Genre(_) | Self::Label(_) | Self::Key(_) | Self::Color(_) | Self::Artwork(_) => {
-                (len, 0)
-            }
+            Self::Genre(_)
+            | Self::Label(_)
+            | Self::Key(_)
+            | Self::Color(_)
+            | Self::Artwork(_)
+            | Self::PlaylistNode(_)
+            | Self::PlaylistEntry(_) => (len, 0),
         };
         sized
             .max(len)
@@ -182,7 +205,9 @@ pub(crate) mod testutil {
 mod tests {
     use super::testutil::{AT, raw};
     use super::*;
-    use crate::pdb::{AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, TrackId};
+    use crate::pdb::{
+        AlbumId, ArtistId, ArtworkId, ColorId, GenreId, KeyId, LabelId, PlaylistId, TrackId,
+    };
 
     /// One built row of every typed table.
     fn built_rows() -> Vec<(ExportTable, ExportRow)> {
@@ -230,7 +255,38 @@ mod tests {
                 ExportTable::Artwork,
                 ExportRow::Artwork(Artwork::new(ArtworkId::new(7).unwrap(), "/a.jpg")),
             ),
+            (
+                ExportTable::PlaylistTree,
+                ExportRow::PlaylistNode(PlaylistNode::new(
+                    PlaylistId::new(9).unwrap(),
+                    None,
+                    0,
+                    false,
+                    "Warmup",
+                )),
+            ),
+            (
+                ExportTable::PlaylistEntries,
+                ExportRow::PlaylistEntry(PlaylistEntry::new(
+                    1,
+                    TrackId::new(8).unwrap(),
+                    PlaylistId::new(9).unwrap(),
+                )),
+            ),
         ]
+    }
+
+    #[test]
+    fn playlist_rows_take_their_length_rounded_up_to_4() {
+        let node = |name: &str| {
+            let id = PlaylistId::new(1).unwrap();
+            ExportRow::PlaylistNode(PlaylistNode::new(id, None, 0, false, name))
+        };
+        // The fresh export's row: 0x14 + 1 + 13 = 34 bytes, padded to 36.
+        assert_eq!(footprint(node("x".repeat(13).as_str())), (34, 36));
+        assert_eq!(footprint(node("abc")), (24, 24));
+        let entry = PlaylistEntry::new(1, TrackId::new(2).unwrap(), PlaylistId::new(3).unwrap());
+        assert_eq!(footprint(ExportRow::PlaylistEntry(entry)), (12, 12));
     }
 
     #[test]
@@ -325,9 +381,12 @@ mod tests {
     #[test]
     fn untyped_tables_decode_to_none() {
         for table in [
-            ExportTable::PlaylistTree,
+            ExportTable::HistoryPlaylists,
+            ExportTable::HistoryEntries,
+            ExportTable::Columns,
             ExportTable::History,
             ExportTable::from_u32(9),
+            ExportTable::from_u32(17),
         ] {
             assert_eq!(ExportRow::decode(table, &raw(&[0; 64])), Ok(None));
         }
@@ -347,7 +406,7 @@ mod tests {
 
         use super::*;
 
-        const TABLES: [ExportTable; 8] = [
+        const TABLES: [ExportTable; 10] = [
             ExportTable::Tracks,
             ExportTable::Genres,
             ExportTable::Artists,
@@ -356,6 +415,8 @@ mod tests {
             ExportTable::Keys,
             ExportTable::Colors,
             ExportTable::Artwork,
+            ExportTable::PlaylistTree,
+            ExportTable::PlaylistEntries,
         ];
 
         fn name() -> impl Strategy<Value = String> {
@@ -434,6 +495,34 @@ mod tests {
                                 .with_name_gap(gap)
                         )
                     )),
+                (
+                    (id(), any::<u32>(), any::<u32>(), name()),
+                    any::<(bool, u32, u32)>()
+                )
+                    .prop_map(
+                        |((id, parent, sort_order, name), (folder, unknown, raw))| (
+                            ExportTable::PlaylistTree,
+                            ExportRow::PlaylistNode(
+                                PlaylistNode::new(
+                                    PlaylistId::new(id).unwrap(),
+                                    PlaylistId::new(parent),
+                                    sort_order,
+                                    folder,
+                                    &name
+                                )
+                                .with_unknown(unknown)
+                                .with_raw_is_folder(raw)
+                            )
+                        )
+                    ),
+                (any::<u32>(), id(), id()).prop_map(|(index, track, playlist)| (
+                    ExportTable::PlaylistEntries,
+                    ExportRow::PlaylistEntry(PlaylistEntry::new(
+                        index,
+                        TrackId::new(track).unwrap(),
+                        PlaylistId::new(playlist).unwrap()
+                    ))
+                )),
             ]
         }
 

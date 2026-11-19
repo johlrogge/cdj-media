@@ -2,7 +2,7 @@
 //! header.
 
 use super::super::{ExportRow, ExportTable, Page, Pdb, TablePointer};
-use super::fixed::{column_rows, default_colors};
+use super::fixed::{column_rows, default_colors, table_17_rows, table_18_rows};
 use super::index::build_index_page;
 use super::{HeapRow, PageLinks, Transaction, build_data_page, build_page, pack, pack_footprints};
 use crate::error::EncodeError;
@@ -26,8 +26,9 @@ pub(crate) fn next_unused_page(page_count: u32, tables: &[TablePointer]) -> u32 
 
 /// Writes a whole `export.pdb` with pages `len_page` bytes long from typed rows of any
 /// table, each table's rows in the order given. Colours are rekordbox's defaults
-/// ([`default_colors`]) unless `rows` holds colour rows; the browse columns are always
-/// rekordbox's ([`column_rows`]); the playlist, history and unnamed tables are empty.
+/// ([`default_colors`]) unless `rows` holds colour rows; the browse columns and tables 17
+/// and 18 always hold rekordbox's rows ([`column_rows`], [`table_17_rows`],
+/// [`table_18_rows`]); the history and other unnamed tables are empty.
 ///
 /// The layout follows the real stick where it shows a rule:
 ///
@@ -143,8 +144,14 @@ impl PageRows {
     }
 }
 
+/// The type of the unnamed table 17, which holds fixed rows ([`table_17_rows`]).
+const TABLE_17: u32 = 17;
+/// The type of the unnamed table 18, which holds fixed rows ([`table_18_rows`]).
+const TABLE_18: u32 = 18;
+
 /// The data pages of each of the 20 tables, in type order: `rows` by table, the default
-/// colours if `rows` has none, and the browse columns, each table packed with [`pack`].
+/// colours if `rows` has none, and the fixed rows of the browse columns and tables 17 and
+/// 18, each table packed with [`pack`].
 fn plan_pages(len_page: usize, rows: Vec<ExportRow>) -> Result<Vec<Vec<PageRows>>, EncodeError> {
     let mut by_table: Vec<Vec<ExportRow>> = (0..TABLE_COUNT).map(|_| Vec::new()).collect();
     for row in rows {
@@ -160,8 +167,13 @@ fn plan_pages(len_page: usize, rows: Vec<ExportRow>) -> Result<Vec<Vec<PageRows>
     let mut plans = Vec::with_capacity(by_table.len());
     for (t, rows) in (0u32..).zip(by_table) {
         let table = ExportTable::from_u32(t);
-        let plan = if table == ExportTable::Columns {
-            let rows = column_rows()?;
+        let fixed = match t {
+            _ if table == ExportTable::Columns => Some(column_rows()?),
+            TABLE_17 => Some(table_17_rows()),
+            TABLE_18 => Some(table_18_rows()),
+            _ => None,
+        };
+        let plan = if let Some(rows) = fixed {
             let footprints: Vec<usize> = rows.iter().map(|row| row.footprint).collect();
             let counts = pack_footprints(len_page, &footprints)?;
             split(rows, &counts)
@@ -365,13 +377,34 @@ mod tests {
         // the columns fit one page; at 512 they take more, from page 41.
         assert_eq!(pdb.page(14).map(Page::raw_type), Some(6));
         assert_eq!(pdb.page(34).map(Page::raw_type), Some(16));
+        // Tables 17 and 18: rekordbox's rows, one page each at 36 and 38.
+        for (t, rows) in [(17, table_17_rows()), (18, table_18_rows())] {
+            assert_eq!(pdb.page(2 * t + 2).map(Page::raw_type), Some(t));
+            let written: Vec<Vec<u8>> = pdb
+                .table_pages(ExportTable::from_u32(t))
+                .flat_map(|page| page.rows())
+                .map(|raw| raw.bytes()[..8].to_vec())
+                .collect();
+            let fixed: Vec<Vec<u8>> = rows.into_iter().map(|row| row.bytes).collect();
+            assert_eq!(written, fixed, "table {t}");
+        }
         let bytes = write_pdb(4096, Vec::new()).unwrap().to_bytes().unwrap();
         let pdb = Pdb::from_bytes(&bytes).unwrap();
         // The last table page is history's index page, 39; its empty candidate, 40, and
-        // those of colours (41) and columns (42) are past the end.
+        // those of colours (41), columns (42) and tables 17 and 18 (43, 44) are past the
+        // end.
         assert_eq!(pdb.page_count(), 40);
-        assert_eq!(pdb.next_unused_page(), 43);
-        assert_eq!(pdb.sequence(), 4);
+        assert_eq!(pdb.next_unused_page(), 45);
+        assert_eq!(pdb.sequence(), 6);
+    }
+
+    #[test]
+    fn the_header_is_a_fresh_exports() {
+        // `unknown2` is 5 in a fresh rekordbox export and its `exportExt.pdb`; the old stick
+        // has 1, which decoding keeps.
+        let pdb = written(Vec::new());
+        assert_eq!((pdb.unknown1(), pdb.unknown2(), pdb.unknown3()), (0, 5, 0));
+        assert!(pdb.header_tail().iter().all(|&b| b == 0));
     }
 
     #[test]

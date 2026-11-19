@@ -37,6 +37,14 @@ fn real_stick_database_loads_every_row() {
         ("keys", db.keys().len(), 43),
         ("colors", db.colors().len(), 8),
         ("artwork", db.artworks().len(), 787),
+        ("playlists", db.playlists().len(), 32),
+        (
+            "playlist tracks",
+            db.playlists()
+                .map(|p| db.playlist_tracks(p.id()).count())
+                .sum(),
+            903,
+        ),
     ];
     eprintln!("database records:");
     for (table, count, _) in counts {
@@ -139,8 +147,8 @@ fn real_stick_references_resolve() {
 }
 
 /// The acceptance test of `Database::to_pdb`: the real stick's database, written as a fresh
-/// file, encoded, decoded and loaded again, equals the loaded one, with no dangling
-/// reference. `to_pdb` writes the database's own colour table.
+/// file, encoded, decoded and loaded again, equals the loaded one, playlists included, with
+/// no dangling reference. `to_pdb` writes the database's own colour table.
 #[test]
 fn real_stick_database_survives_to_pdb() {
     let Some(db) = load() else {
@@ -151,16 +159,19 @@ fn real_stick_database_survives_to_pdb() {
     let written = Pdb::from_bytes(&bytes).expect("the written file decodes");
     let back = Database::from_pdb(&written).expect("the written file loads");
     eprintln!(
-        "to_pdb: {} pages of {} bytes, {} tracks",
+        "to_pdb: {} pages of {} bytes, {} tracks, {} playlists",
         written.page_count(),
         written.len_page(),
-        back.tracks().len()
+        back.tracks().len(),
+        back.playlists().len()
     );
     assert!(
         back == db,
         "the written database differs from the loaded one"
     );
+    assert_eq!(db.dangling_references().count(), 0);
     assert_eq!(back.dangling_references().count(), 0);
+    assert_eq!(back.playlists().len(), 32);
 }
 
 /// Of `pairs` (stick id, rebuilt id): how many are equal; how many rebuilt ids equal the
