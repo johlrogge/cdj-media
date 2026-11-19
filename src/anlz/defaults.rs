@@ -4,12 +4,29 @@
 //! Each value is the most common value of its field in the real-stick fixture
 //! (`local-fixtures/real-stick`), checked by the local test
 //! `tests/anlz_local.rs::real_stick_defaults_are_modal`, which also prints every
-//! distribution. The survey covers the stick's 848 `.DAT` files only: 1,696 `PCOB` tags
-//! and 604 `PCPT` entries (167 hot cues, 437 memory points). `.EXT` files are not surveyed.
+//! distribution. The survey covers the stick's 848 `.DAT` files: 1,696 `PCOB` tags and 604
+//! `PCPT` entries (167 hot cues, 437 memory points). Of the `.EXT` files only `PWV3` is
+//! checked, by `real_stick_anlz_tag_orders`. The `.DAT` builder `AnlzFile::track_dat` as a
+//! whole is checked by `real_stick_dat_files_rebuild_identically`.
 //!
 //! The order links and `memory_count` of memory point lists are not defaults: the builders
 //! compute them (see `CueList::memory`), checked by
 //! `tests/anlz_local.rs::real_stick_cue_list_builders_match_rekordbox`.
+
+/// `PMAI` header bytes 12..28 (`len_header` is 28 in all 2,500 ANLZ files): `00000001
+/// 00010000 00010000 00000000` in 793 of 848 `.DAT` files. The 22 `.DAT` files without an
+/// `.EXT` (stale analyses, 21 without beats) have zeros in the middle two words; the first
+/// word is 0 in all 25 MP3 files and 13 others. Checked by `real_stick_defaults_are_modal`.
+pub(crate) const PMAI_UNKNOWN_HEADER: [u8; 16] = [0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+
+/// `PVBR` header bytes 12..16: zero in all 848 `.DAT` files. Checked by
+/// `real_stick_dat_files_rebuild_identically`.
+pub(crate) const PVBR_HEADER: [u8; 4] = [0; 4];
+
+/// `PVBR` body length: 1,604 bytes in all 848 `.DAT` files. The body is all zero for every
+/// AIFF and WAV track (823 files) and holds a seek index for the 25 MP3 tracks. Checked by
+/// `real_stick_dat_files_rebuild_identically`.
+pub(crate) const PVBR_BODY_LEN: usize = 1_604;
 
 /// `PQTZ` `unknown1` (offset 0x0c): 0 in all 848 `.DAT` files. Checked by
 /// `real_stick_defaults_are_modal`.
@@ -18,6 +35,23 @@ pub(crate) const PQTZ_UNKNOWN1: u32 = 0;
 /// `PQTZ` `unknown2` (offset 0x10): `0x00080000` in all 848 `.DAT` files. djl-analysis
 /// documents `00800000`, which does not match. Checked by `real_stick_defaults_are_modal`.
 pub(crate) const PQTZ_UNKNOWN2: u32 = 0x0008_0000;
+
+/// `PWAV` `unknown1` (offset 0x10): `0x00010000` in all 848 `.DAT` files. djl-analysis
+/// documents `00100000`, which does not match. Checked by `real_stick_defaults_are_modal`.
+pub(crate) const PWAV_UNKNOWN1: u32 = 0x0001_0000;
+
+/// Whiteness of the columns of a flat `PWAV` placeholder: 5. The one silent track on the
+/// fixture has a `PWAV` of 400 columns `0xa2` (height 2, whiteness 5), and whiteness 5 is
+/// the most common one at heights 2 to 9 across all 848 `.DAT` files.
+pub(crate) const PWAV_FLAT_WHITENESS: u8 = 5;
+
+/// `PWV2` `unknown1` (offset 0x10): `0x00010000` in all 848 `.DAT` files. djl-analysis
+/// documents `00100000`, which does not match. Checked by `real_stick_defaults_are_modal`.
+pub(crate) const PWV2_UNKNOWN1: u32 = 0x0001_0000;
+
+/// `PWV3` `unknown1` (offset 0x14): `0x00960000` in all 826 `.EXT` files, as djl-analysis
+/// documents. Checked by `real_stick_anlz_tag_orders`.
+pub(crate) const PWV3_UNKNOWN1: u32 = 0x0096_0000;
 
 /// `PCOB` `unknown1` (offset 0x10): 0 in 1,694 of 1,696 lists, 3 in the rest. Checked by
 /// `real_stick_defaults_are_modal`.
