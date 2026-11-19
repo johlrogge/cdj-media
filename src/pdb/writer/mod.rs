@@ -7,11 +7,12 @@
 //! - [`build_data_page`]: one data page from a table's rows, as rekordbox lays it out;
 //! - [`pack`]: how many rows go on each page.
 //!
-//! Each rule is checked against every real page in `local` (`local-fixtures/`). Chaining
-//! pages, index pages and the file header are not done here: the builder takes the page
-//! links ([`PageLinks`]) as inputs.
+//! Each rule is checked against every real page in `local` (`local-fixtures/`). The page
+//! builder takes the page links ([`PageLinks`]) as inputs; the whole file, with its page
+//! chains, index pages (`index`), fixed tables (`fixed`) and header, is laid out by
+//! `file::write_pdb` (slice 7d), checked in `local_file`.
 
-use super::page::{DataHeader, HEAP_START, ROWS_PER_GROUP, row_index_len};
+use super::page::{HEAP_START, PageHeader, ROWS_PER_GROUP, row_index_len};
 use super::{DataBody, ExportRow, ExportTable, Page, RowGroup};
 use crate::error::EncodeError;
 
@@ -136,18 +137,51 @@ pub(crate) fn build_data_page(
     links: PageLinks,
     transaction: &Transaction,
 ) -> Result<Page, EncodeError> {
+    let rows = rows
+        .into_iter()
+        .enumerate()
+        .map(|(slot, row)| {
+            let row = match row.index_shift() {
+                Some(_) => row.with_index_shift(index_shift_for_slot(slot)?),
+                None => row,
+            };
+            Ok(HeapRow {
+                footprint: row.heap_footprint()?,
+                bytes: row.encode()?,
+            })
+        })
+        .collect::<Result<_, EncodeError>>()?;
+    build_page(len_page, table.to_u32(), rows, links, transaction)
+}
+
+/// A row as the page builder places it: its bytes and the heap bytes it takes before the
+/// next row ([`ExportRow::heap_footprint`] for typed rows), at least its length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeapRow {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) footprint: usize,
+}
+
+/// Builds a data page of type `page_type` from rows already encoded, laid out as
+/// [`build_data_page`] describes; nothing in the rows is changed.
+///
+/// # Errors
+///
+/// As for [`build_data_page`].
+pub(crate) fn build_page(
+    len_page: usize,
+    page_type: u32,
+    rows: Vec<HeapRow>,
+    links: PageLinks,
+    transaction: &Transaction,
+) -> Result<Page, EncodeError> {
     let mut heap = Vec::new();
     let mut offsets = Vec::with_capacity(rows.len());
-    for (slot, row) in rows.into_iter().enumerate() {
-        let row = match row.index_shift() {
-            Some(_) => row.with_index_shift(index_shift_for_slot(slot)?),
-            None => row,
-        };
+    for row in rows {
         let start = heap.len();
         offsets.push(u16::try_from(start).map_err(|_| heap_overflow())?);
-        let footprint = row.heap_footprint()?;
-        heap.extend(row.encode()?);
-        heap.resize(start.saturating_add(footprint), 0);
+        heap.extend(row.bytes);
+        heap.resize(start.saturating_add(row.footprint).max(heap.len()), 0);
     }
     let sizes = page_sizes(len_page, heap.len(), offsets.len())?;
     heap.resize(heap.len() + usize::from(sizes.free), 0);
@@ -175,9 +209,9 @@ pub(crate) fn build_data_page(
         .zip(tranrf)
         .map(|(group, tranrf)| RowGroup::new(group.to_vec(), all_present(group), tranrf))
         .collect();
-    let header = DataHeader {
+    let header = PageHeader {
         page_index: links.page_index,
-        page_type: table.to_u32(),
+        page_type,
         next_page: links.next_page,
         sequence: links.sequence,
         page_flags: DATA_PAGE_FLAGS,
@@ -210,10 +244,26 @@ fn all_present(group: &[u16]) -> u16 {
 /// [`EncodeError::LengthOverflow`] (`"pdb page heap"`) for a row that does not fit even an
 /// empty page, and the errors of the rows' `encode`.
 pub(crate) fn pack(len_page: usize, rows: &[ExportRow]) -> Result<Vec<usize>, EncodeError> {
+    let footprints = rows
+        .iter()
+        .map(ExportRow::heap_footprint)
+        .collect::<Result<Vec<_>, _>>()?;
+    pack_footprints(len_page, &footprints)
+}
+
+/// [`pack`] for rows given by their heap footprints.
+///
+/// # Errors
+///
+/// [`EncodeError::LengthOverflow`] (`"pdb page heap"`) for a row that does not fit even an
+/// empty page.
+pub(crate) fn pack_footprints(
+    len_page: usize,
+    footprints: &[usize],
+) -> Result<Vec<usize>, EncodeError> {
     let mut pages = Vec::new();
     let (mut count, mut used) = (0usize, 0usize);
-    for row in rows {
-        let footprint = row.heap_footprint()?;
+    for &footprint in footprints {
         let with_row = used.saturating_add(footprint);
         if page_sizes(len_page, with_row, count + 1).is_err() {
             if count > 0 {
@@ -231,8 +281,13 @@ pub(crate) fn pack(len_page: usize, rows: &[ExportRow]) -> Result<Vec<usize>, En
     Ok(pages)
 }
 
+mod file;
+mod fixed;
+mod index;
 #[cfg(test)]
 mod local;
+#[cfg(test)]
+mod local_file;
 
 #[cfg(test)]
 mod tests {

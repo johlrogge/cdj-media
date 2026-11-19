@@ -19,6 +19,9 @@ const FIRST_PAGE_FIELD: usize = 8;
 /// Smallest `len_page` accepted: room for a data page's header, so every page can at least
 /// hold its fixed header.
 const MIN_LEN_PAGE: usize = HEAP_START;
+/// The header's `unknown2` (0x10) in built files: 1 in the real `export.pdb` and
+/// `exportExt.pdb`.
+const HEADER_UNKNOWN2: u32 = 1;
 
 /// A whole `export.pdb`, as stored.
 ///
@@ -133,6 +136,60 @@ impl Pdb {
             unknown3,
             tables,
             header_tail,
+            pages,
+        })
+    }
+
+    /// A file built from its parts, as rekordbox writes the header: `unknown1` and
+    /// `unknown3` 0, `unknown2` 1, and the rest of page 0 after the table pointers zero.
+    /// `pages` are pages 1 onwards; `None` is a zero-filled page that no chain reaches. Each
+    /// page is placed at its position, so row errors are located as in a decoded file.
+    ///
+    /// # Errors
+    ///
+    /// [`EncodeError::LengthOverflow`] (`"pdb num_tables"`) when the table pointers do not
+    /// fit page 0, and (`"pdb len_page"`) when `len_page` is below 0x28.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
+    )]
+    pub(crate) fn new(
+        len_page: u32,
+        next_unused_page: u32,
+        sequence: u32,
+        tables: Vec<TablePointer>,
+        pages: Vec<Option<Page>>,
+    ) -> Result<Self, EncodeError> {
+        let page_len = usize::try_from(len_page).unwrap_or(usize::MAX);
+        if page_len < MIN_LEN_PAGE {
+            return Err(EncodeError::LengthOverflow {
+                context: "pdb len_page",
+            });
+        }
+        let tail_len = tables
+            .len()
+            .checked_mul(TABLE_POINTER_LEN)
+            .and_then(|len| page_len.checked_sub(TABLES_AT)?.checked_sub(len))
+            .ok_or(EncodeError::LengthOverflow {
+                context: "pdb num_tables",
+            })?;
+        let pages = pages
+            .into_iter()
+            .enumerate()
+            .map(|(i, page)| match page {
+                Some(page) => Slot::Chained(page.at(offset((i + 1).saturating_mul(page_len)))),
+                None => Slot::Unchained(vec![0; page_len]),
+            })
+            .collect();
+        Ok(Self {
+            unknown1: 0,
+            len_page,
+            next_unused_page,
+            unknown2: HEADER_UNKNOWN2,
+            sequence,
+            unknown3: 0,
+            tables,
+            header_tail: vec![0; tail_len],
             pages,
         })
     }
@@ -387,6 +444,54 @@ mod tests {
         assert_eq!(rows[0].offset(), 0);
         assert_eq!(rows[0].bytes(), body.heap());
         assert!(pdb.page(0).is_none() && pdb.page(3).is_none());
+    }
+
+    #[test]
+    fn a_file_built_from_its_parts_equals_the_decoded_file() {
+        let bytes = minimal_file();
+        let pdb = decode(&bytes);
+        let pages = vec![pdb.page(1).cloned(), pdb.page(2).cloned()];
+        let built = Pdb::new(
+            LEN as u32,
+            NEXT_UNUSED,
+            SEQUENCE,
+            pdb.tables().to_vec(),
+            pages,
+        )
+        .expect("builds");
+        assert_eq!(built, pdb);
+        assert_eq!(built.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn missing_pages_are_zero_filled_and_unchained() {
+        let pdb = decode(&minimal_file());
+        let tables = pdb.tables().to_vec();
+        let pages = vec![pdb.page(1).cloned(), pdb.page(2).cloned(), None];
+        let built = Pdb::new(LEN as u32, NEXT_UNUSED, SEQUENCE, tables, pages).unwrap();
+        assert_eq!(built.page_count(), 4);
+        assert_eq!(built.unchained_page(3), Some(&[0; LEN][..]));
+        let bytes = built.to_bytes().unwrap();
+        assert_eq!(decode(&bytes), built);
+    }
+
+    #[test]
+    fn a_header_too_short_for_its_tables_fails_to_build() {
+        let tables = vec![TablePointer::new(0, 2, 1, 1); MAX_TABLES + 1];
+        assert_eq!(
+            Pdb::new(LEN as u32, 1, 1, tables, Vec::new()),
+            Err(EncodeError::LengthOverflow {
+                context: "pdb num_tables"
+            })
+        );
+        assert_eq!(
+            Pdb::new(0x27, 1, 1, Vec::new(), Vec::new()),
+            Err(EncodeError::LengthOverflow {
+                context: "pdb len_page"
+            })
+        );
+        let built = Pdb::new(0x28, 1, 1, Vec::new(), Vec::new()).unwrap();
+        assert_eq!(built.to_bytes().unwrap().len(), 0x28);
     }
 
     #[test]

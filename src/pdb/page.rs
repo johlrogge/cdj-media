@@ -128,13 +128,13 @@ pub struct RowGroup {
     tranrf: u16,
 }
 
-/// The header fields of a built data page that its body does not determine.
+/// The header fields of a built page that its body does not determine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the page writer builds pages from slice 7d on")
+    expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
 )]
-pub(crate) struct DataHeader {
+pub(crate) struct PageHeader {
     pub(crate) page_index: u32,
     pub(crate) page_type: u32,
     pub(crate) next_page: u32,
@@ -163,7 +163,7 @@ impl Page {
         not(test),
         expect(dead_code, reason = "the page writer builds pages from slice 7d on")
     )]
-    pub(crate) fn data(header: DataHeader, body: DataBody) -> Self {
+    pub(crate) fn data(header: PageHeader, body: DataBody) -> Self {
         let offsets: usize = body.row_groups.iter().map(|g| g.offsets.len()).sum();
         let present: u32 = body.row_groups.iter().map(|g| g.rowpf.count_ones()).sum();
         Self {
@@ -181,6 +181,41 @@ impl Page {
             body: PageBody::Data(body),
             file_offset: 0,
         }
+    }
+
+    /// An index page from its header fields and body. `unknown1`, `unknown2` and the row
+    /// counts are 0, as on every real index page.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
+    )]
+    pub(crate) fn index(header: PageHeader, body: IndexBody) -> Self {
+        Self {
+            unknown1: 0,
+            page_index: header.page_index,
+            page_type: header.page_type,
+            next_page: header.next_page,
+            sequence: header.sequence,
+            unknown2: 0,
+            num_row_offsets: 0,
+            num_rows: 0,
+            page_flags: header.page_flags,
+            free_size: header.free_size,
+            used_size: header.used_size,
+            body: PageBody::Index(body),
+            file_offset: 0,
+        }
+    }
+
+    /// The page as if decoded from file offset `file_offset`, so row errors are absolute.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
+    )]
+    pub(crate) fn at(mut self, file_offset: u64) -> Self {
+        self.file_offset = file_offset;
+        self
     }
 
     /// The first `u32` of the header, 0 in real files.
@@ -506,6 +541,15 @@ pub(crate) fn row_index_len(count: usize) -> usize {
 }
 
 impl IndexBody {
+    /// An index page body: every byte after the common header.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
+    )]
+    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
     /// The bytes after the common header.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -708,7 +752,7 @@ mod tests {
 
     #[test]
     fn row_offsets_that_do_not_fit_13_bits_fail_to_encode() {
-        let header = DataHeader {
+        let header = PageHeader {
             page_index: 1,
             page_type: 2,
             next_page: 3,

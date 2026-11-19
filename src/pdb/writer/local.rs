@@ -15,7 +15,7 @@ const EXPORT: &str = "local-fixtures/real-stick/PIONEER/rekordbox/export.pdb";
 /// Set to `1` to make a missing local fixture fail the test instead of skipping it.
 const REQUIRE_ENV: &str = "CDJ_MEDIA_REQUIRE_LOCAL_FIXTURES";
 
-fn load() -> Option<Pdb> {
+pub(super) fn load() -> Option<Pdb> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(EXPORT);
     if !path.exists() {
         assert!(
@@ -31,7 +31,7 @@ fn load() -> Option<Pdb> {
 }
 
 /// Every table of the file, in file order.
-fn tables(pdb: &Pdb) -> Vec<ExportTable> {
+pub(super) fn tables(pdb: &Pdb) -> Vec<ExportTable> {
     pdb.tables()
         .iter()
         .map(|t| ExportTable::from_u32(t.raw_type()))
@@ -144,12 +144,12 @@ fn real_index_shift_is_computed_from_the_slot() {
     assert_none(&failures);
 }
 
-fn has_tombstones(page: &Page) -> bool {
+pub(super) fn has_tombstones(page: &Page) -> bool {
     usize::from(page.num_row_offsets()) != page.rows().count()
 }
 
 /// The tables whose rows are typed.
-const TYPED: [ExportTable; 8] = [
+pub(super) const TYPED: [ExportTable; 8] = [
     ExportTable::Tracks,
     ExportTable::Genres,
     ExportTable::Artists,
