@@ -87,10 +87,6 @@ impl ExportRow {
     }
 
     /// The table the row belongs to.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
-    )]
     pub(crate) fn table(&self) -> ExportTable {
         match self {
             Self::Track(_) => ExportTable::Tracks,
@@ -105,10 +101,6 @@ impl ExportRow {
     }
 
     /// The row's `index_shift`, for the rows that have one: tracks, artists and albums.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
-    )]
     pub(crate) fn index_shift(&self) -> Option<u16> {
         match self {
             Self::Track(row) => Some(row.index_shift()),
@@ -122,10 +114,6 @@ impl ExportRow {
 
     /// The row with `index_shift` replaced; rows without one are returned unchanged.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
-    )]
     pub(crate) fn with_index_shift(self, index_shift: u16) -> Self {
         match self {
             Self::Track(row) => Self::Track(row.with_index_shift(index_shift)),
@@ -155,10 +143,6 @@ impl ExportRow {
     /// # Errors
     ///
     /// The errors of [`encode`](Self::encode).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
-    )]
     pub(crate) fn heap_footprint(&self) -> Result<usize, EncodeError> {
         /// What artist, album and track rows take after their rounded-up length.
         const TRAILER: usize = 4;

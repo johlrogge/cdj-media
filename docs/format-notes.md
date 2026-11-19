@@ -277,4 +277,30 @@ rekordbox-exported, CDJ-played stick.
   data pages against 178, artwork 8 against 31, the small tables 1 to 4 against 5 to 20),
   `next_unused_page` 153, `sequence` 114. All 2,221 typed rows come back in order, and it
   loads into the same `Database` as the stick, with no dangling reference.
+  `Database::to_pdb` writes the same layout from the loaded database (144 pages), its
+  own colour table included, and the result loads back equal to it.
+- **Names and ids** (checked by `tests/database_local.rs`):
+  - Names are unique within every small table, compared exactly: artists 277, albums 239,
+    genres 19, labels 21, keys 43, artwork paths 787. Case counts: 3 pairs of artists
+    differ only in case (274 names case-folded). No name is empty or has leading or
+    trailing whitespace, so the stick doesn't show whether rekordbox trims. Tracks
+    without a value reference 0 instead: 24 have no artist, 51 no album, 713 no genre,
+    800 no label, 137 no key and 40 no artwork.
+  - Album names are unique on their own, so the stick can't tell "one album per name"
+    from "one album per name and album artist". The album artist is a tag of its own:
+    76 albums have none, 17 albums hold tracks of more than one track artist (16 of them
+    with an album artist), and 125 tracks on albums with an album artist have a
+    different track artist.
+  - Every record is referenced: no artist, album, genre, label, key or artwork row is
+    unused. Each artwork row belongs to exactly one track (787 rows, 787 tracks with
+    artwork), even within an album.
+  - Ids have gaps: tracks 1 to 881 for 827 rows, artists 1 to 292 for 277, albums 1 to
+    251 for 239, genres 1 to 22 for 19, keys 1 to 44 for 43, artwork 1 to 835 for 787;
+    labels 1 to 21 without gaps. Rebuilding the database through find-or-insert in
+    track id order (each track's artists, album artist, album, genre, label, key and
+    artwork, then the track) allocates ids in the same order as rekordbox for all 827
+    tracks, 787 artworks, 19 genres and 21 labels, 262 of 277 artists and 226 of 239
+    albums: the rebuilt id equals the rank of rekordbox's id. So rekordbox allocates in
+    the order records first appear and doesn't reuse the ids of deleted records. Key ids
+    follow another order (0 of 43). Rebuilding in page order matches almost nothing.
 - `exportExt.pdb` uses the same page framing, with its own table numbering (types 0–8).

@@ -29,7 +29,8 @@
 //! page heap.
 //!
 //! [`Database`] (in [`model`]) is the domain model over those rows: text as `String`,
-//! rows keyed by id, references resolved.
+//! rows keyed by id, references resolved. It can be built from scratch and written as a
+//! fresh file with [`Database::to_pdb`].
 
 pub(crate) mod defaults;
 mod file;
@@ -40,13 +41,6 @@ mod rows;
 mod table;
 #[cfg(test)]
 mod testutil;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Database::to_pdb writes files with it from slice 7e on"
-    )
-)]
 mod writer;
 
 pub use file::Pdb;

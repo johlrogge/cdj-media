@@ -130,10 +130,6 @@ pub struct RowGroup {
 
 /// The header fields of a built page that its body does not determine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
-)]
 pub(crate) struct PageHeader {
     pub(crate) page_index: u32,
     pub(crate) page_type: u32,
@@ -159,10 +155,6 @@ impl Page {
     /// every real page; `num_row_offsets` counts the body's offsets and `num_rows` the set
     /// `rowpf` bits, as on every real page. Counts that do not fit their fields saturate
     /// here and fail to encode.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer builds pages from slice 7d on")
-    )]
     pub(crate) fn data(header: PageHeader, body: DataBody) -> Self {
         let offsets: usize = body.row_groups.iter().map(|g| g.offsets.len()).sum();
         let present: u32 = body.row_groups.iter().map(|g| g.rowpf.count_ones()).sum();
@@ -185,10 +177,6 @@ impl Page {
 
     /// An index page from its header fields and body. `unknown1`, `unknown2` and the row
     /// counts are 0, as on every real index page.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
-    )]
     pub(crate) fn index(header: PageHeader, body: IndexBody) -> Self {
         Self {
             unknown1: 0,
@@ -209,10 +197,6 @@ impl Page {
 
     /// The page as if decoded from file offset `file_offset`, so row errors are absolute.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
-    )]
     pub(crate) fn at(mut self, file_offset: u64) -> Self {
         self.file_offset = file_offset;
         self
@@ -398,10 +382,6 @@ impl Page {
 impl DataBody {
     /// A data page body; `unknown3` and `unknown4` are 0, as in every real page. `heap` is
     /// the whole heap, up to the row index.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer builds pages from slice 7d on")
-    )]
     pub(crate) fn new(
         transaction_row_count: u16,
         transaction_row_index: u16,
@@ -542,10 +522,6 @@ pub(crate) fn row_index_len(count: usize) -> usize {
 
 impl IndexBody {
     /// An index page body: every byte after the common header.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Database::to_pdb writes files from slice 7e on")
-    )]
     pub(crate) fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
@@ -559,10 +535,6 @@ impl IndexBody {
 impl RowGroup {
     /// A row group; the caller keeps to at most 16 offsets, fewer only in a page's last
     /// group.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer builds pages from slice 7d on")
-    )]
     pub(crate) fn new(offsets: Vec<u16>, rowpf: u16, tranrf: u16) -> Self {
         Self {
             offsets,

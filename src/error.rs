@@ -5,6 +5,8 @@
 
 use thiserror::Error as ThisError;
 
+use crate::pdb::model::Dangling;
+
 /// Any error produced by this crate.
 #[derive(Debug, ThisError)]
 #[non_exhaustive]
@@ -131,6 +133,10 @@ pub enum EncodeError {
         /// The field being encoded.
         context: &'static str,
     },
+    /// A record of the database being written names a record it doesn't have, which a
+    /// written file must not (ADR-009).
+    #[error("dangling reference: {:?} of {:?} names a missing {:?}", .0.field, .0.from, .0.id)]
+    DanglingReference(Dangling),
 }
 
 #[cfg(test)]

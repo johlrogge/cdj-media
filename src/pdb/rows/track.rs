@@ -529,10 +529,6 @@ impl Track {
 
     /// Replaces `index_shift` (offset 2); the page writer sets it.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer sets it from slice 7d on")
-    )]
     pub(crate) fn with_index_shift(mut self, index_shift: u16) -> Self {
         self.index_shift = index_shift;
         self
@@ -735,10 +731,6 @@ impl Track {
     /// [`ExportRow::heap_footprint`]).
     ///
     /// [`ExportRow::heap_footprint`]: super::ExportRow::heap_footprint
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the page writer lays out rows from slice 7d on")
-    )]
     pub(super) fn aligned_len(&self) -> usize {
         self.strings.iter().fold(FIXED_LEN, |len, s| {
             len.checked_next_multiple_of(4)

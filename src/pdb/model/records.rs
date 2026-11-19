@@ -2,7 +2,7 @@
 
 use super::super::{
     AlbumId, ArtistId, ArtworkId, ColorId, ExportTable, FileType, GenreId, KeyId, LabelId, RawRow,
-    TrackId, rows,
+    TrackFields, TrackId, rows,
 };
 use crate::encoding::{Bpm, DeviceSqlString};
 use crate::error::DecodeError;
@@ -195,6 +195,50 @@ impl Track {
         /// The analysis date, `YYYY-MM-DD` as stored; `None` when empty.
         analysis_date,
     }
+
+    /// The track's values as the fields of a track row, the ids unchanged: the lowering of
+    /// [`Database::to_pdb`](super::Database::to_pdb). `None` text is empty.
+    pub(crate) fn to_fields(&self) -> TrackFields {
+        let text = |value: &Option<String>| value.clone().unwrap_or_default();
+        TrackFields {
+            sample_rate: self.sample_rate,
+            composer_id: self.composer_id,
+            file_size: self.file_size,
+            artwork_id: self.artwork_id,
+            key_id: self.key_id,
+            original_artist_id: self.original_artist_id,
+            label_id: self.label_id,
+            remixer_id: self.remixer_id,
+            bitrate: self.bitrate,
+            track_number: self.track_number,
+            tempo: self.tempo,
+            genre_id: self.genre_id,
+            album_id: self.album_id,
+            artist_id: self.artist_id,
+            disc_number: self.disc_number,
+            play_count: self.play_count,
+            year: self.year,
+            sample_depth: self.sample_depth,
+            duration: self.duration,
+            color_id: self.color_id,
+            rating: self.rating,
+            file_type: self.file_type,
+            isrc: text(&self.isrc),
+            lyricist: self.lyricist.clone(),
+            message: self.message.clone(),
+            publish_track_info: self.publish_track_info,
+            autoload_hot_cues: self.autoload_hot_cues,
+            date_added: text(&self.date_added),
+            release_date: text(&self.release_date),
+            mix_name: self.mix_name.clone(),
+            analysis_path: self.analysis_path.clone(),
+            analysis_date: text(&self.analysis_date),
+            comment: self.comment.clone(),
+            title: self.title.clone(),
+            filename: self.filename.clone(),
+            file_path: self.file_path.clone(),
+        }
+    }
 }
 
 impl FromRow for Track {
@@ -203,8 +247,18 @@ impl FromRow for Track {
     const ID_FIELD: (u64, &'static str) = (0x48, "pdb track id");
 
     fn decode(raw: &RawRow<'_>) -> Result<Self, DecodeError> {
-        let row = rows::Track::decode(raw)?;
-        Ok(Self {
+        Ok(Self::from_row(&rows::Track::decode(raw)?))
+    }
+
+    fn id(&self) -> TrackId {
+        self.id
+    }
+}
+
+impl Track {
+    /// The domain values of a track row.
+    pub(super) fn from_row(row: &rows::Track) -> Self {
+        Self {
             id: row.id(),
             title: text(row.title()),
             artist_id: row.artist_id(),
@@ -242,11 +296,7 @@ impl FromRow for Track {
             rating: row.rating(),
             play_count: row.play_count(),
             file_type: row.file_type(),
-        })
-    }
-
-    fn id(&self) -> TrackId {
-        self.id
+        }
     }
 }
 
@@ -260,6 +310,15 @@ pub struct Album {
 }
 
 impl Album {
+    /// The album with id `id`.
+    pub(super) fn new(id: AlbumId, name: &str, artist_id: Option<ArtistId>) -> Self {
+        Self {
+            id,
+            name: name.to_owned(),
+            artist_id,
+        }
+    }
+
     copy_getters! {
         /// The album's id.
         id: AlbumId,
@@ -309,6 +368,14 @@ macro_rules! id_text_record {
         }
 
         impl $name {
+            /// The record with id `id`.
+            pub(super) fn new(id: $id, $field: &str) -> Self {
+                Self {
+                    id,
+                    $field: $field.to_owned(),
+                }
+            }
+
             copy_getters! {
                 /// The id.
                 id: $id,
