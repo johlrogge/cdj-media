@@ -21,6 +21,42 @@ rekordbox-exported, CDJ-played stick.
 - Memory cues are not stored in time order: 58 of 68 lists with two or more cues aren't.
 - Undocumented tags seen: PQT2 (`.EXT`), PWVC and PVDI (`.2EX`). PWVC has
   `len_header` 14.
+- **PQTZ beat grids** (826 tracks with a `.DAT`, matched to their track row through the
+  analysis path; `tests/beat_grid_local.rs`). Below, `t_n` is the time of beat `n` (0 for
+  the first) and `I` = 60000 / BPM ms, from the stored tempo:
+  - 2 grids are empty. In the other 824 every beat has the same tempo, equal to the
+    track row's tempo; no grid on the stick changes tempo.
+  - The first beat is always before `I` (all 824), so the grid reaches back to the
+    earliest beat at or after 0. 85 grids start at exactly 0, 75 of them on beat 1.
+  - `beat_number` counts 1 to 4 from the first beat without a break (all 824). The first
+    beat is beat 1 in 532 grids, 2 in 185, 3 in 40 and 4 in 67.
+  - In 801 grids every interval is `floor(I)` or `ceil(I)`; in 23 some are 1 to 2 ms
+    further off.
+  - Beat times are not computed from the stored whole-ms first beat. In 483 of the 801,
+    some real phase φ gives every beat as `floor(φ + n·I)` (equivalently `round`, with φ
+    shifted by ½), but φ falls anywhere in the first beat's millisecond: the anchored
+    rule `floor(t0 + c + n·I)` matches every beat for 127 to 147 of the 483 grids,
+    whichever fraction `c` is used, best at `c` = ½ (rounding). A two-stage rule through
+    whole samples (round or floor to a sample, then floor or round to a ms) fits 489, not
+    more.
+  - The other 318 regular grids need a tempo finer than the stored hundredths. 144 fit one
+    finer tempo, nearly all within ±0.005 BPM of the stored one (stored = rounded);
+    174 fit none: they split into runs at the stored tempo, each with its own phase (108
+    into 2 runs, 37 into 3–5, 16 into 6–10, 157 into 11 or more). Over a whole track the
+    last beat sits within ±5 ms of `t0 + last·I` in 731 grids, and up to 190 ms off in
+    others.
+  - The last beat is the last one before the end of the track: with the end taken from
+    the `.EXT` PWV3 length (1/150 s entries), the beat count equals the number of beats
+    `t0 + n·I` before the end for 743 of 815 grids, is one fewer for 69, and is 1 or 2
+    off for 12.
+    The pdb duration is whole seconds, rounded down: PWV3 is 0 to 1.1 s longer. From
+    the pdb seconds the count is right for only 191 of 815 grids, short by 1 to 4 beats
+    for the rest.
+  - Rebuilding each grid from its first beat 1, its tempo and the PWV3 length with
+    `round(t_a + k·I)` gives 121 of 824 grids back exactly and 479,003 of 702,606 beats.
+    Of the 483 exact grids: 121 equal, 335 within 1 ms everywhere, 22 differ only in the
+    last beat or two, and 5 start on another beat because the beat nearest 0 lands within
+    1 ms of it, on the other side. With pdb seconds as the length, 41 come back exactly.
 
 ## export.pdb
 
