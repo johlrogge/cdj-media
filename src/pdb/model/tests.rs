@@ -788,6 +788,62 @@ fn tracks_are_added_with_the_next_id() {
     assert_eq!(db.add_track(full_fields()).map(TrackId::get), Ok(1));
 }
 
+/// `next_track_id` and `next_artwork_id` are the ids the next insert allocates, and peeking
+/// changes nothing.
+fn assert_peeks_match_inserts(mut db: Database, path: &str) {
+    for _ in 0..2 {
+        let (track, artwork) = (db.next_track_id(), db.next_artwork_id());
+        let before = db.clone();
+        assert_eq!(db.next_track_id(), track, "peeking twice");
+        assert_eq!(db, before, "peeking changes nothing");
+        assert_eq!(db.add_track(TrackFields::default()), Ok(track));
+        let path = format!("{path}/{}", artwork.get());
+        assert_eq!(db.find_or_insert_artwork(&path), Some(artwork));
+    }
+}
+
+#[test]
+fn the_next_ids_are_those_the_next_inserts_allocate() {
+    let db = Database::new();
+    assert_eq!(
+        (db.next_track_id().get(), db.next_artwork_id().get()),
+        (1, 1)
+    );
+    assert_peeks_match_inserts(db, "/new");
+}
+
+#[test]
+fn a_loaded_database_peeks_the_ids_after_its_last() {
+    let db = load(&with_tracks(vec![track_row(8, full_fields())]));
+    assert_eq!(
+        (db.next_track_id().get(), db.next_artwork_id().get()),
+        (9, 71)
+    );
+    assert_peeks_match_inserts(db, "/new");
+}
+
+#[test]
+fn after_the_highest_id_the_peek_is_the_lowest_free_one() {
+    let db = load(&[
+        (
+            ExportTable::Tracks,
+            vec![
+                track_row(1, full_fields()),
+                track_row(u32::MAX, full_fields()),
+            ],
+        ),
+        (
+            ExportTable::Artwork,
+            vec![artwork_row(u32::MAX, "/last.jpg")],
+        ),
+    ]);
+    assert_eq!(
+        (db.next_track_id().get(), db.next_artwork_id().get()),
+        (2, 1)
+    );
+    assert_peeks_match_inserts(db, "/new");
+}
+
 #[test]
 fn a_track_the_writer_cannot_encode_is_not_added() {
     use crate::EncodeError;
