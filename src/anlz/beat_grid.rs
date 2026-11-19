@@ -88,6 +88,46 @@ impl Beat {
     }
 }
 
+/// A constant-tempo beat grid as a caller knows it: one downbeat, a tempo and the track's
+/// length, with four beats to the bar. [`BeatGrid::constant_tempo`] expands it into beats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ConstantGrid {
+    first_beat: Millis,
+    tempo: Bpm,
+    duration: Millis,
+}
+
+impl ConstantGrid {
+    /// A grid with a downbeat at `first_beat`, `tempo` throughout, for a track `duration`
+    /// long; `None` when `tempo` is 0, which has no beat interval.
+    pub const fn new(first_beat: Millis, tempo: Bpm, duration: Millis) -> Option<Self> {
+        if tempo.centi() == 0 {
+            return None;
+        }
+        Some(Self {
+            first_beat,
+            tempo,
+            duration,
+        })
+    }
+
+    /// The downbeat the grid is anchored at.
+    pub const fn first_beat(&self) -> Millis {
+        self.first_beat
+    }
+
+    /// The tempo.
+    pub const fn tempo(&self) -> Bpm {
+        self.tempo
+    }
+
+    /// The length of the track.
+    pub const fn duration(&self) -> Millis {
+        self.duration
+    }
+}
+
 /// The `PQTZ` tag: the beat grid of a track.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -109,6 +149,46 @@ impl BeatGrid {
             beats,
             body_tail: Vec::new(),
         }
+    }
+
+    /// Expands a constant-tempo grid into its beats, with rekordbox's default unknown values.
+    ///
+    /// Beat `k` from the first beat is at `first_beat + round(k · 60000 / BPM)` ms, rounded
+    /// half up, each beat on its own so rounding never drifts. The grid runs from the
+    /// earliest such beat at or after 0 to the last one before `duration`; bar positions
+    /// count 1 to 4 with the first beat at 1, backwards too. Every grid on the real-stick
+    /// fixture has one tempo and starts within one beat of 0.
+    ///
+    /// rekordbox works from a phase finer than the stored whole milliseconds, so it can
+    /// place any beat 1 ms either way of this one, and some of its grids use a tempo finer
+    /// than the stored hundredths of a BPM. See `docs/format-notes.md`.
+    pub fn constant_tempo(grid: &ConstantGrid) -> Self {
+        let centi = i64::from(grid.tempo.centi());
+        let first = i64::from(grid.first_beat.get());
+        let end = i64::from(grid.duration.get());
+        // Beat k from the first: first + round(k · 60000 / BPM), half up, in whole numbers.
+        let time_of = |k: i64| first + (k * 12_000_000 + centi).div_euclid(2 * centi);
+        let mut start = 0;
+        while time_of(start - 1) >= 0 {
+            start -= 1;
+        }
+        let mut beats = Vec::new();
+        for k in start.. {
+            let time = time_of(k);
+            if time >= end {
+                break;
+            }
+            let bar_position = match k.rem_euclid(4) {
+                0 => BeatInBar::One,
+                1 => BeatInBar::Two,
+                2 => BeatInBar::Three,
+                _ => BeatInBar::Four,
+            };
+            // In range: 0 <= time < end <= u32::MAX.
+            let time = Millis::new(u32::try_from(time).unwrap_or(u32::MAX));
+            beats.push(Beat::new(bar_position, grid.tempo, time));
+        }
+        Self::new(beats)
     }
 
     /// Replaces `unknown1` (offset 0x0c).
@@ -394,6 +474,86 @@ mod tests {
         assert_eq!(
             err(&bytes),
             (AT + 4, "PQTZ len_header", DecodeErrorKind::InvalidValue)
+        );
+    }
+
+    /// `(beat_number, time)` of each beat, all at `centi` BPM × 100.
+    fn shape(grid: &BeatGrid, centi: u32) -> Vec<(u16, u32)> {
+        assert!(grid.beats().iter().all(|b| b.tempo().centi() == centi));
+        grid.beats()
+            .iter()
+            .map(|b| (b.bar_position().number(), b.time().get()))
+            .collect()
+    }
+
+    fn constant(first_beat: u32, centi: u32, duration: u32) -> BeatGrid {
+        let grid = ConstantGrid::new(
+            Millis::new(first_beat),
+            Bpm::from_centi(centi),
+            Millis::new(duration),
+        )
+        .expect("non-zero tempo");
+        BeatGrid::constant_tempo(&grid)
+    }
+
+    #[test]
+    fn constant_tempo_counts_bars_from_the_first_beat_until_the_end() {
+        // 120 BPM: a beat every 500 ms. The beat at the end itself is past the track.
+        let grid = constant(0, 12_000, 2_500);
+        assert_eq!(
+            shape(&grid, 12_000),
+            [(1, 0), (2, 500), (3, 1_000), (4, 1_500), (1, 2_000)]
+        );
+        assert_eq!(grid, BeatGrid::new(grid.beats().to_vec()));
+    }
+
+    #[test]
+    fn constant_tempo_rounds_each_beat_from_the_first_half_up() {
+        // 128 BPM: 468.75 ms. Each beat is rounded on its own, so errors don't add up.
+        let grid = constant(100, 12_800, 1_900);
+        assert_eq!(
+            shape(&grid, 12_800),
+            [(1, 100), (2, 569), (3, 1_038), (4, 1_506)]
+        );
+        // 132 BPM: 454.54… ms. Beats 11 and 1,100 fall on whole ms, with no drift.
+        let grid = constant(0, 13_200, 500_001);
+        let times: Vec<u32> = grid.beats().iter().map(|b| b.time().get()).collect();
+        assert_eq!((times[1], times[11], times[1_100]), (455, 5_000, 500_000));
+    }
+
+    #[test]
+    fn constant_tempo_extends_back_to_the_earliest_beat_at_or_after_zero() {
+        let grid = constant(1_100, 12_000, 2_000);
+        assert_eq!(
+            shape(&grid, 12_000),
+            [(3, 100), (4, 600), (1, 1_100), (2, 1_600)]
+        );
+        // A beat at exactly 0 is kept, and a whole bar back wraps the numbering.
+        let grid = constant(2_500, 12_000, 3_000);
+        assert_eq!(
+            shape(&grid, 12_000),
+            [
+                (4, 0),
+                (1, 500),
+                (2, 1_000),
+                (3, 1_500),
+                (4, 2_000),
+                (1, 2_500)
+            ]
+        );
+        // 128 BPM back from 1,000 ms: −468.75 rounds to −469 and −937.5 to −937.
+        let grid = constant(1_000, 12_800, 1_400);
+        assert_eq!(shape(&grid, 12_800), [(3, 63), (4, 531), (1, 1_000)]);
+    }
+
+    #[test]
+    fn constant_grid_needs_a_tempo() {
+        let zero = ConstantGrid::new(Millis::new(0), Bpm::from_centi(0), Millis::new(1_000));
+        assert_eq!(zero, None);
+        let grid = ConstantGrid::new(Millis::new(7), Bpm::from_centi(1), Millis::new(9)).unwrap();
+        assert_eq!(
+            (grid.first_beat(), grid.tempo(), grid.duration()),
+            (Millis::new(7), Bpm::from_centi(1), Millis::new(9))
         );
     }
 

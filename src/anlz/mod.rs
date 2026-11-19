@@ -21,7 +21,7 @@ pub(crate) mod defaults;
 mod path;
 mod tag;
 
-pub use beat_grid::{Beat, BeatGrid};
+pub use beat_grid::{Beat, BeatGrid, ConstantGrid};
 pub use cues::{Cue, CueList, CueListKind, CueSpan, HotCueSlot};
 pub use path::AudioPath;
 pub use tag::{FourCc, RawTag, Tag};
