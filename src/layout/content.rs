@@ -68,6 +68,12 @@ impl ContentPath {
     pub fn file_name(&self) -> &str {
         self.0.file_name()
     }
+
+    /// Whether the file name has an extension, as [`for_track`](Self::for_track) keeps one:
+    /// 1 to 7 UTF-16 units after the last dot that isn't the first character.
+    pub(crate) fn has_extension(&self) -> bool {
+        extension_at(self.file_name()).is_some()
+    }
 }
 
 impl From<ContentPath> for StickPath {

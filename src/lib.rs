@@ -22,6 +22,7 @@ pub mod anlz;
 mod bytes;
 pub mod encoding;
 mod error;
+pub mod export;
 pub mod layout;
 pub mod pdb;
 

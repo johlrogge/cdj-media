@@ -11,6 +11,7 @@
 //!   id: what the artwork row holds.
 //! - [`ContentPathAllocator`]: makes the content paths of one stick distinct, as FAT32
 //!   compares them (ADR-010).
+//! - [`export_pdb_path`]: where `export.pdb` goes.
 //! - [`audio_path_tag`]: the `PPTH` tag of the analysis files, which repeats the file path.
 
 mod allocator;
@@ -26,6 +27,11 @@ pub use content::ContentPath;
 pub use stick_path::{MAX_COMPONENT_UNITS, MAX_PATH_UNITS, PathError, StickPath};
 
 use crate::anlz::AudioPath;
+
+/// The path of the database, `/PIONEER/rekordbox/export.pdb`.
+pub fn export_pdb_path() -> StickPath {
+    StickPath::parse("/PIONEER/rekordbox/export.pdb").expect("a valid stick path")
+}
 
 /// The `PPTH` tag of a track's analysis files (`.DAT` and `.EXT`): the track's audio file
 /// path, `file_path`, verbatim, so it equals the track row's file path (slot 20).

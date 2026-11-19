@@ -43,31 +43,50 @@ impl ContentPathAllocator {
     /// [`ContentPath::for_track`]) goes to: `path` with its directories spelled as before
     /// and, if that path is taken, a numbered file name. The result is taken from then on.
     pub fn allocate(&mut self, path: ContentPath) -> ContentPath {
-        let text = path.as_stick_path().as_str();
-        let [_, artist, album, file] = text.splitn(5, '/').skip(1).collect::<Vec<_>>()[..] else {
-            unreachable!("a content path is /Contents/<artist>/<album>/<file name>");
-        };
+        let allocated = self.peek(&path);
+        let (artist, album, file) = components(&allocated);
+        self.artists
+            .entry(fold(artist))
+            .or_insert_with(|| artist.to_owned());
+        self.albums
+            .entry((fold(artist), fold(album)))
+            .or_insert_with(|| album.to_owned());
+        self.files.insert(fold(&format!("{artist}/{album}/{file}")));
+        allocated
+    }
+
+    /// The path [`allocate`](Self::allocate) would give `path` now, taking nothing, so a
+    /// caller can check what depends on it before it allocates.
+    pub(crate) fn peek(&self, path: &ContentPath) -> ContentPath {
+        let (artist, album, file) = components(path);
         let artist = self
             .artists
-            .entry(fold(artist))
-            .or_insert_with(|| artist.to_owned())
-            .clone();
+            .get(&fold(artist))
+            .map_or(artist, String::as_str);
         let album = self
             .albums
-            .entry((fold(&artist), fold(album)))
-            .or_insert_with(|| album.to_owned())
-            .clone();
+            .get(&(fold(artist), fold(album)))
+            .map_or(album, String::as_str);
         let dir = fold(&format!("{artist}/{album}/"));
         let mut name = file.to_owned();
         let mut number = 1u32;
-        while !self.files.insert(format!("{dir}{}", fold(&name))) {
+        while self.files.contains(&format!("{dir}{}", fold(&name))) {
             number += 1;
             name = numbered(file, number);
         }
         // The components are already sanitised and the name within 48 units, so this
         // gives them back unchanged.
-        ContentPath::for_track(&artist, &album, &name)
+        ContentPath::for_track(artist, album, &name)
     }
+}
+
+/// The artist directory, album directory and file name of `path`.
+fn components(path: &ContentPath) -> (&str, &str, &str) {
+    let text = path.as_stick_path().as_str();
+    let [_, artist, album, file] = text.splitn(5, '/').skip(1).collect::<Vec<_>>()[..] else {
+        unreachable!("a content path is /Contents/<artist>/<album>/<file name>");
+    };
+    (artist, album, file)
 }
 
 /// `name` case folded: each character in upper case, when that is one character.
@@ -263,6 +282,31 @@ mod tests {
             paths[1],
             format!("/Contents/A/B/{} (2)", "\u{1f3b5}".repeat(22))
         );
+    }
+
+    /// `peek` gives the path `allocate` would and takes nothing.
+    #[test]
+    fn peek_gives_the_allocated_path_without_taking_it() {
+        let mut allocator = ContentPathAllocator::new();
+        allocator.allocate(ContentPath::for_track("ABBA", "Gold", "1.mp3"));
+        for (artist, album, file, expected) in [
+            ("ABBA", "Gold", "1.mp3", "/Contents/ABBA/Gold/1 (2).mp3"),
+            ("abba", "GOLD", "2.mp3", "/Contents/ABBA/Gold/2.mp3"),
+            ("Other", "Album", "1.mp3", "/Contents/Other/Album/1.mp3"),
+        ] {
+            let path = ContentPath::for_track(artist, album, file);
+            let peeked = allocator.peek(&path);
+            assert_eq!(peeked.as_stick_path().as_str(), expected);
+            assert_eq!(allocator.peek(&path), peeked, "peeking twice");
+        }
+        // Nothing was taken: the other artist's directory is still free to spell.
+        let path = ContentPath::for_track("OTHER", "album", "1.mp3");
+        assert_eq!(
+            allocator.allocate(path).as_stick_path().as_str(),
+            "/Contents/OTHER/album/1.mp3"
+        );
+        let path = ContentPath::for_track("ABBA", "Gold", "1.mp3");
+        assert_eq!(allocator.peek(&path), allocator.clone().allocate(path));
     }
 
     /// The same tracks in the same order always get the same paths.

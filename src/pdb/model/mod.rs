@@ -345,10 +345,6 @@ impl Database {
 
     /// The id the next [`add_track`](Self::add_track) allocates (ADR-016), so a caller can
     /// derive paths from it before the insert. Peeking changes nothing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by ExportBuilder in a later step (ADR-018)")
-    )]
     pub(crate) fn next_track_id(&self) -> TrackId {
         next_id(&self.tracks)
     }
@@ -356,10 +352,6 @@ impl Database {
     /// The id the next artwork that [`find_or_insert_artwork`](Self::find_or_insert_artwork)
     /// inserts gets (ADR-016); a path the database already has keeps its id. Peeking changes
     /// nothing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by ExportBuilder in a later step (ADR-018)")
-    )]
     pub(crate) fn next_artwork_id(&self) -> ArtworkId {
         next_id(&self.artworks)
     }

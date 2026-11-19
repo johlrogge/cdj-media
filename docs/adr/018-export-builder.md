@@ -32,8 +32,9 @@ is 018.
 
   Tests work on the map.
 - **Writing.** `Export::write_to(root)` is a thin helper. It creates directories and writes
-  every file with `create_new`. If any file already exists it refuses and overwrites nothing,
-  so it is for fresh sticks only.
+  every file with `create_new`. If any target file already exists it writes nothing and
+  returns `AlreadyExists`, so it is for fresh sticks only. An I/O error partway through
+  leaves the files written so far in place.
 - **Phase 1 files:** `export.pdb`, and an `ANLZ0000.DAT` per track with the tags
   `PPTH PVBR PQTZ PWAV PWV2 PCOB PCOB`.
 - **Files not written:**
@@ -76,7 +77,8 @@ Paths come from the library, never from the caller:
   - `Constant { first_beat, tempo }` goes through `constant_tempo` with the track's duration.
   - `Beats(BeatGrid)` is used as given.
 
-  The row's tempo is the grid's tempo.
+  The row's tempo is the grid's tempo. For `Beats` that is the first beat's tempo, or 0 when
+  there are no beats.
 - **Cues:**
   - Hot cues A–C are `(HotCueSlot, CueSpan)` pairs, and memory cues are `CueSpan`s.
   - They keep the caller's order and are never sorted, because rekordbox doesn't sort.
@@ -84,7 +86,7 @@ Paths come from the library, never from the caller:
   - Labels and colours live in PCO2 (`.EXT`), so they are not in Phase 1.
 - **Waveform** (`Waveform`):
   - `Flat` is the default. It uses `WaveformPreview::flat` and `TinyWaveformPreview::flat`,
-    with ADR-015's placeholder heights.
+    with heights PWAV 2 and PWV2 1, which is what rekordbox writes for a silent track.
   - `Previews(WaveformPreview, TinyWaveformPreview)` is used as given.
   - MDMA's `Envelope` input is deferred to its own slice and ADR. How it maps to PWAV and
     PWV2 can only be judged on hardware, and PWV2 can't be derived from PWAV.
@@ -104,12 +106,21 @@ Paths come from the library, never from the caller:
 The builder uses `EncodeError` throughout. `Error::Io` comes only from `write_to`. Each
 problem is reported where it first shows:
 
-- **`add_track`** validates eagerly and changes nothing on error.
+- **`add_track`** validates eagerly and changes nothing on error. It works in this order:
+  1. check the input;
+  2. peek the path and the ids;
+  3. encode the `.DAT`;
+  4. do a dry run of `Track::new`;
+  5. only then allocate the path and insert the rows.
+
+  It does not clone the database per track, because that would be O(n²).
 - **`ValueOutOfRange`** for:
-  - a file name with no extension;
-  - a duplicate hot cue slot;
+  - a file name with no extension, after sanitising;
+  - a duplicate hot cue slot, or a slot other than A–C;
   - a loop whose end ≤ its start;
-  - artwork that isn't JPEG.
+  - artwork that isn't JPEG;
+  - a `Constant` grid with tempo 0;
+  - a duration of 65,536 s or more, which overflows the row's seconds field.
 - **Row and `.DAT` errors** come from `Database::add_track` and `track_dat`.
 - **`build()`** runs `to_pdb`, which refuses dangling playlist references
   (`DanglingReference`) and playlists whose parent isn't a folder.
@@ -127,13 +138,17 @@ problem is reported where it first shows:
     Export::write_to(&self, root: &Path) -> Result<(), Error>
 
 `NewTrack` has public fields and `Default`, like `TrackFields`:
-- **tags:** title, artist, album, album artist, composer, remixer, original artist, genre,
-  label, key, comment, mix name and ISRC as text; year, track number, disc number, rating
-  and colour;
+- **tags:** title, artist, album, album artist, composer, remixer, original artist, lyricist,
+  genre, label, key, comment, mix name and ISRC as text; year, release date, track number,
+  disc number, rating, colour and play count;
 - **audio metadata:** file name, `AudioFormat`, file size, duration in ms, sample rate,
   depth and bitrate;
 - **analysis:** `Grid`, hot cues, memory cues, `Waveform`, and artwork as `Option<Vec<u8>>`;
 - **dates:** optional.
+
+`NewTrack::default()` has the format `Aiff`. The file extension is not checked against the
+`AudioFormat`. `ExportDate::new(y, m, d)` returns `None` for a date that isn't on the
+calendar.
 
 ## Why
 
@@ -171,6 +186,9 @@ The test checks two things:
 Documented differences:
 - slot 14 is derived from the id, not hashed;
 - the duration, if `floor(ms/1000)` of the supplied length differs from the row.
+
+The fixture holds no artwork images, so the test supplies a stand-in JPEG and compares only
+the artwork rows.
 
 A second test on synthetic data covers `Constant` and `Flat`.
 
