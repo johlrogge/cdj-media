@@ -84,6 +84,16 @@ players wrote no analysis of their own.
 - There is no large waveform. The NXS draws it from PWV3 in the `.EXT`, and we don't
   write `.EXT` yet, so the NXS does read PWV3. This leads to ADR-020.
 
+## Image B5
+
+B4 plus a `.EXT` per track (ADR-020): `PPTH PWV3 PCOB PCOB`, with empty PCOBs and a flat
+PWV3 of rekordbox's silence value. The B4 run's write-back is in `hw-runs/b4-nxs`; the
+player wrote no analysis of its own.
+
+**Result (NXS):** works.
+- The large waveform shows beat-grid lines.
+- The red downbeat lines fall on the bar.
+
 ## Still open
 
 - **A collision** (`ANLZ0001`) on hardware.
