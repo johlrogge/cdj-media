@@ -1,5 +1,5 @@
 use super::*;
-use crate::anlz::{AnlzFile, Beat, ConstantGrid, CueList};
+use crate::anlz::{AnlzFile, Beat, ConstantGrid, CueList, FourCc};
 use crate::encoding::BeatInBar;
 use crate::layout::{AnlzPath, ArtworkPath, audio_path_tag};
 use crate::pdb::{ArtworkId, Pdb, PlaylistId};
@@ -107,9 +107,10 @@ fn a_track_gets_a_row_a_dat_and_an_audio_destination_that_agree() {
     let content = ContentPath::for_track("Björk", "Ålbum", "01 Ü.aiff");
     let destinations: Vec<_> = export.audio_destinations().collect();
     assert_eq!(destinations, [(id, &content)]);
-    let dat_path = AnlzPath::for_content(&content, 0).unwrap().dat();
+    let anlz = AnlzPath::for_content(&content, 0).unwrap();
+    let (dat_path, ext_path) = (anlz.dat(), anlz.ext());
     let paths: Vec<&str> = export.files().map(|(p, _)| p.as_str()).collect();
-    assert_eq!(paths, [dat_path.as_str(), EXPORT_PDB]);
+    assert_eq!(paths, [dat_path.as_str(), ext_path.as_str(), EXPORT_PDB]);
 
     let db = database(&export);
     let row = db.track(id).expect("the track row");
@@ -142,6 +143,89 @@ fn a_track_gets_a_row_a_dat_and_an_audio_destination_that_agree() {
     .unwrap();
     assert_eq!(dat(&export, id), expected);
     assert_eq!(dat(&export, id).path(), Some(row.file_path()));
+
+    // Waveform::Flat: rekordbox's silent detail, 150 entries a second of the exact
+    // duration, 201,999 ms.
+    let expected = AnlzFile::track_ext(
+        audio_path_tag(&content),
+        WaveformDetail::flat(0, Millis::new(201_999)),
+    );
+    assert_eq!(ext(&export, id), expected);
+    let detail = ext(&export, id).waveform_detail().unwrap().clone();
+    assert_eq!(detail.data(), vec![0xe0; 30_300]);
+}
+
+/// The `.EXT` next to the `.DAT` of track `id` in `export`, decoded.
+fn ext(export: &Export, id: TrackId) -> AnlzFile {
+    let db = database(export);
+    let dat = db
+        .track(id)
+        .expect("the track row")
+        .analysis_path()
+        .to_owned();
+    let path = dat.strip_suffix(".DAT").expect("a .DAT path").to_owned() + ".EXT";
+    let path = StickPath::parse(&path).expect("a stick path");
+    AnlzFile::from_bytes(export.file(&path).expect("an .EXT")).expect("decodes")
+}
+
+/// The `.EXT`'s cue lists are empty even when the track has cues, as rekordbox writes them
+/// in every `.EXT` (ADR-020); the cues are in the `.DAT`.
+#[test]
+fn ext_cue_lists_are_empty_even_when_the_track_has_cues() {
+    let mut builder = ExportBuilder::new(date());
+    let id = builder
+        .add_track(NewTrack {
+            hot_cues: vec![(HotCueSlot::A, point(9))],
+            memory_cues: vec![point(900), looped(50, 60)],
+            ..track("A", "B", "c.aiff")
+        })
+        .unwrap();
+    let export = builder.build().unwrap();
+    let lists: Vec<crate::anlz::Tag> = ext(&export, id).tags_with(FourCc::PCOB).cloned().collect();
+    assert_eq!(
+        lists,
+        [
+            crate::anlz::Tag::Cues(CueList::hot([])),
+            crate::anlz::Tag::Cues(CueList::memory([])),
+        ]
+    );
+    assert_eq!(dat(&export, id).hot_cues().map(|l| l.cues().len()), Some(1));
+}
+
+/// Every track's `.EXT` holds its `.DAT`'s `PPTH`, empty cue lists, and a detail of
+/// `WaveformDetail::entries_for` its duration.
+#[test]
+fn each_track_gets_an_ext_that_agrees_with_its_dat() {
+    let mut builder = ExportBuilder::new(date());
+    let durations = [201_999, 1_000, 21, 0];
+    let ids: Vec<TrackId> = durations
+        .iter()
+        .enumerate()
+        .map(|(i, &ms)| {
+            builder
+                .add_track(NewTrack {
+                    duration: Millis::new(ms),
+                    hot_cues: vec![(HotCueSlot::C, point(300)), (HotCueSlot::A, point(9))],
+                    memory_cues: vec![point(900), looped(50, 60)],
+                    ..track("A", "B", &format!("{i}.aiff"))
+                })
+                .unwrap()
+        })
+        .collect();
+    let export = builder.build().unwrap();
+    let empty = [
+        crate::anlz::Tag::Cues(CueList::hot([])),
+        crate::anlz::Tag::Cues(CueList::memory([])),
+    ];
+    for (&id, ms) in ids.iter().zip(durations) {
+        let (dat, ext) = (dat(&export, id), ext(&export, id));
+        assert_eq!(ext.tags()[0], dat.tags()[0], "{ms} ms: PPTH");
+        let lists: Vec<_> = ext.tags_with(FourCc::PCOB).cloned().collect();
+        assert_eq!(lists, empty, "{ms} ms");
+        let entries = ext.waveform_detail().unwrap().data().len();
+        assert_eq!(entries, WaveformDetail::entries_for(Millis::new(ms)));
+    }
+    assert_eq!(export.files().count(), 1 + 2 * ids.len());
 }
 
 /// Every tag reaches the row; names go through find-or-insert exactly as given, so one
@@ -247,11 +331,13 @@ fn given_beats_and_previews_are_used_as_given() {
     let grid = BeatGrid::new(vec![beat(BeatInBar::Three, 10), beat(BeatInBar::Four, 508)]);
     let preview = WaveformPreview::new(vec![0x21, 0x42, 0x63]);
     let tiny = TinyWaveformPreview::new(vec![7, 3]);
+    // Not of the duration's length: used as given.
+    let detail = WaveformDetail::new(vec![0xe0, 0x3f, 0x81]);
     let mut builder = ExportBuilder::new(date());
     let id = builder
         .add_track(NewTrack {
             grid: Grid::Beats(grid.clone()),
-            waveform: Waveform::Previews(preview.clone(), tiny.clone()),
+            waveform: Waveform::Previews(preview.clone(), tiny.clone(), detail.clone()),
             format: AudioFormat::Wav,
             ..track("A", "B", "c.wav")
         })
@@ -261,6 +347,7 @@ fn given_beats_and_previews_are_used_as_given() {
     assert_eq!(file.beat_grid(), Some(&grid));
     assert_eq!(file.waveform_preview(), Some(&preview));
     assert_eq!(file.tiny_waveform_preview(), Some(&tiny));
+    assert_eq!(ext(&export, id).waveform_detail(), Some(&detail));
     let db = database(&export);
     let row = db.track(id).unwrap();
     assert_eq!(row.tempo(), Bpm::from_centi(12_050));
@@ -563,7 +650,7 @@ fn each_track_gets_its_own_artwork_row_and_file() {
         assert_eq!(db.artwork(id).unwrap().path(), path.as_str());
         assert_eq!(export.file(&path), Some(bytes.as_slice()));
     }
-    assert_eq!(export.files().count(), 1 + 4 + 3);
+    assert_eq!(export.files().count(), 1 + 2 * 4 + 3);
 }
 
 #[test]
@@ -715,7 +802,7 @@ fn write_to_writes_every_file_under_the_root() {
         assert_eq!(std::fs::read(path.under(&root.0)).unwrap(), bytes, "{path}");
         written += 1;
     }
-    assert_eq!(written, 3);
+    assert_eq!(written, 4);
 }
 
 #[test]
@@ -786,8 +873,9 @@ fn tracks_sharing_a_folder_get_numbered_files() {
         assert_eq!(row.analysis_path(), format!("{folder}/{name}.DAT"));
         assert_eq!(row.file_path(), content.as_stick_path().as_str());
         assert_eq!(dat(&export, id).path(), Some(row.file_path()));
+        assert_eq!(ext(&export, id).path(), Some(row.file_path()));
     }
-    assert_eq!(export.files().count(), 1 + 2);
+    assert_eq!(export.files().count(), 1 + 2 * 2);
 }
 
 /// Paths that are the same file on FAT32 go through the allocator, in input order, and the

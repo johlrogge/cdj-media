@@ -21,6 +21,7 @@ use super::FourCc;
 use super::defaults;
 use super::tag::{Frame, write_frame};
 use crate::bytes::Writer;
+use crate::encoding::Millis;
 use crate::error::{DecodeContext, DecodeError, DecodeErrorKind, EncodeError};
 
 /// Documented `len_header` of a `PWAV` or `PWV2` tag.
@@ -35,6 +36,9 @@ pub const PREVIEW_COLUMNS: usize = 400;
 /// Number of columns in a `PWV2` tiny preview written by rekordbox (all 848 real `.DAT`
 /// files).
 pub const TINY_PREVIEW_COLUMNS: usize = 100;
+
+/// `PWV3` columns per second of audio: 150, half a CD frame each.
+const DETAIL_PER_SECOND: u64 = 150;
 
 /// Largest `PWAV` and `PWV3` column height: five bits.
 const MAX_HEIGHT: u8 = 0x1f;
@@ -372,6 +376,29 @@ impl WaveformDetail {
         }
     }
 
+    /// The number of columns rekordbox writes for audio `duration` long: 150 a second,
+    /// rounded up, `ceil(ms · 3 / 20)` (ADR-020).
+    ///
+    /// rekordbox counts from the exact length, `ceil(frames · 150 / rate)`; from the length
+    /// in whole milliseconds this is the same except when the exact length lies just past a
+    /// multiple of 20 ms, where it gives one column fewer. It matched all 6 tracks of the
+    /// rekordbox-hw1 fixture.
+    pub fn entries_for(duration: Millis) -> usize {
+        let entries = (u64::from(duration.get()) * DETAIL_PER_SECOND).div_ceil(1000);
+        usize::try_from(entries).expect("at most 644,245,095 entries")
+    }
+
+    /// A placeholder for callers without waveform data:
+    /// [`entries_for(duration)`](Self::entries_for) columns, all of `height` (capped at 31)
+    /// and of whiteness 7.
+    ///
+    /// rekordbox writes a silent track's detail at height 0: every column `0xe0`. The
+    /// whiteness is rekordbox's; the caller chooses the height.
+    pub fn flat(height: u8, duration: Millis) -> Self {
+        let column = (defaults::PWV3_FLAT_WHITENESS << 5) | height.min(MAX_HEIGHT);
+        Self::new(vec![column; Self::entries_for(duration)])
+    }
+
     /// Replaces `unknown1` (offset 0x14).
     #[must_use]
     #[cfg_attr(
@@ -681,6 +708,35 @@ mod tests {
                 ..detail
             }
         );
+    }
+
+    /// rekordbox's PWV3 length: ceil(ms · 150 / 1000), measured on the 6 tracks of
+    /// rekordbox-hw1 against their exact lengths (the first two values are two of them).
+    #[test]
+    fn detail_entries_are_150_a_second_rounded_up() {
+        let entries = |ms| WaveformDetail::entries_for(Millis::new(ms));
+        assert_eq!(entries(393_375), 59_007);
+        assert_eq!(entries(456_000), 68_400);
+        assert_eq!(entries(0), 0);
+        assert_eq!(entries(1), 1);
+        assert_eq!(entries(20), 3);
+        assert_eq!(entries(21), 4);
+        assert_eq!(entries(u32::MAX), 644_245_095);
+    }
+
+    #[test]
+    fn flat_detail_is_rekordbox_silence_at_the_callers_height() {
+        let flat = WaveformDetail::flat(0, Millis::new(1_000));
+        assert_eq!(flat.data(), [0xe0; 150]);
+        assert_eq!(flat.unknown1(), defaults::PWV3_UNKNOWN1);
+        let low = WaveformDetail::flat(2, Millis::new(7));
+        assert_eq!(low.data(), [0xe2; 2]);
+        assert!(
+            WaveformDetail::flat(200, Millis::new(10))
+                .heights()
+                .all(|h| h == 31)
+        );
+        assert!(WaveformDetail::flat(5, Millis::new(0)).data().is_empty());
     }
 
     #[test]

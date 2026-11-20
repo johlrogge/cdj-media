@@ -1,11 +1,12 @@
 //! ADR-018's acceptance test: `ExportBuilder` rebuilds the fresh rekordbox export in
 //! `local-fixtures/rekordbox-hw1` (one playlist of 6 tracks) from its loaded `Database` and
-//! its `.DAT` files. Skips itself when the fixture is missing.
+//! its `.DAT` and `.EXT` files. Skips itself when the fixture is missing.
 //!
 //! Each track, in track id order, gets its row's tags and audio values, its `.DAT`'s beat
-//! grid (`Grid::Beats`), previews (`Waveform::Previews`) and cues, and artwork when its row
-//! has some; then the playlist is added in entry order. The fixture holds no artwork images,
-//! so a stand-in JPEG is used, which only the artwork rows see.
+//! grid (`Grid::Beats`), previews and cues, its `.EXT`'s detail (previews and detail as
+//! `Waveform::Previews`), and artwork when its row has some; then the playlist is added in
+//! entry order. The fixture holds no artwork images, so a stand-in JPEG is used, which only
+//! the artwork rows see.
 //!
 //! The export holds the user's library, so the test prints counts and field names only,
 //! never titles, artists, paths or playlist names.
@@ -14,7 +15,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use cdj_media::anlz::{AnlzFile, CueSpan, HotCueSlot};
+use cdj_media::anlz::{AnlzFile, CueSpan, FourCc, HotCueSlot, Tag};
 use cdj_media::encoding::Millis;
 use cdj_media::export::{AudioFormat, ExportBuilder, ExportDate, Grid, NewTrack, Waveform};
 use cdj_media::layout::{StickPath, export_pdb_path};
@@ -38,8 +39,9 @@ fn date(text: Option<&str>) -> Option<ExportDate> {
     ExportDate::new(year, u8::try_from(month).ok()?, u8::try_from(day).ok()?)
 }
 
-/// The track's values as the builder takes them, with its `.DAT`'s analysis.
-fn new_track(db: &Database, t: &Track, dat: &AnlzFile) -> NewTrack {
+/// The track's values as the builder takes them, with its `.DAT`'s analysis and its `.EXT`'s
+/// detail waveform.
+fn new_track(db: &Database, t: &Track, dat: &AnlzFile, ext: &AnlzFile) -> NewTrack {
     let name = |a: Option<&cdj_media::pdb::model::Artist>| a.map_or("", |a| a.name()).to_owned();
     let album = db.album_of(t);
     let format = match t.file_type() {
@@ -93,6 +95,7 @@ fn new_track(db: &Database, t: &Track, dat: &AnlzFile) -> NewTrack {
         waveform: Waveform::Previews(
             dat.waveform_preview().expect("PWAV").clone(),
             dat.tiny_waveform_preview().expect("PWV2").clone(),
+            ext.waveform_detail().expect("PWV3").clone(),
         ),
         release_date: t.release_date().unwrap_or_default().to_owned(),
         lyricist: t.lyricist().to_owned(),
@@ -176,6 +179,8 @@ fn table_differences(rebuilt: &Database, fixture: &Database) -> Vec<&'static str
 /// ADR-018's acceptance test:
 /// - the builder gives every track rekordbox's id;
 /// - the 6 `.DAT` files come back byte for byte, at the rebuilt rows' analysis paths;
+/// - the 6 `.EXT` files next to them are rekordbox's, cut to the `PPTH PWV3 PCOB PCOB` prefix,
+///   header included (ADR-020);
 /// - the rebuilt `export.pdb` loads to a `Database` equal to the fixture's, analysis paths
 ///   (slot 14) included: they are hashed as rekordbox hashes them (ADR-019). The duration,
 ///   the one documented difference left, can't differ: each track is given its row's whole
@@ -189,16 +194,20 @@ fn export_builder_rebuilds_the_fresh_export() {
     let fixture = load(&pdb);
     let mut builder = ExportBuilder::new(ExportDate::new(2000, 1, 1).unwrap());
     let mut dats = Vec::new();
+    let mut exts = Vec::new();
     let mut moved_ids = 0;
     for t in fixture.tracks() {
-        let path = t.analysis_path().trim_start_matches('/');
-        let bytes = std::fs::read(root.join(path)).expect("read a .DAT");
+        let path = root.join(t.analysis_path().trim_start_matches('/'));
+        let bytes = std::fs::read(&path).expect("read a .DAT");
         let dat = AnlzFile::from_bytes(&bytes).expect("decode a .DAT");
+        let ext_bytes = std::fs::read(path.with_extension("EXT")).expect("read an .EXT");
+        let ext = AnlzFile::from_bytes(&ext_bytes).expect("decode an .EXT");
         let id = builder
-            .add_track(new_track(&fixture, t, &dat))
+            .add_track(new_track(&fixture, t, &dat, &ext))
             .expect("the builder takes the track");
         moved_ids += usize::from(id != t.id());
         dats.push((id, bytes));
+        exts.push((id, ext));
     }
     for playlist in fixture.playlists() {
         let name = playlist.name();
@@ -225,11 +234,22 @@ fn export_builder_rebuilds_the_fresh_export() {
             export.file(&path) == Some(bytes.as_slice())
         })
         .count();
+    let ext_prefixes_identical = exts
+        .iter()
+        .filter(|(id, rekordbox)| {
+            let row = rebuilt.track(*id).expect("the rebuilt row");
+            let dat = row.analysis_path().strip_suffix(".DAT").expect(".DAT");
+            let path = StickPath::parse(&format!("{dat}.EXT")).expect("a stick path");
+            export
+                .file(&path)
+                .is_some_and(|bytes| bytes == ext_prefix(rekordbox))
+        })
+        .count();
     let tracks = track_differences(&rebuilt, &fixture);
     let tables = table_differences(&rebuilt, &fixture);
     eprintln!(
         "rebuilt {} tracks ({moved_ids} with another id), {} playlists; {identical} .DAT \
-         files identical; {} files in the export",
+         files identical, {ext_prefixes_identical} .EXT prefixes; {} files in the export",
         fixture.tracks().len(),
         fixture.playlists().len(),
         export.files().count(),
@@ -239,8 +259,28 @@ fn export_builder_rebuilds_the_fresh_export() {
 
     assert_eq!(moved_ids, 0, "track ids");
     assert_eq!((dats.len(), identical), (6, 6), ".DAT files identical");
+    assert_eq!(
+        (exts.len(), ext_prefixes_identical),
+        (6, 6),
+        ".EXT files identical to rekordbox's PPTH PWV3 PCOB PCOB and header"
+    );
     assert_eq!(tracks, BTreeMap::new(), "track fields that differ");
     assert!(tables.is_empty(), "tables that differ: {tables:?}");
-    // 1 export.pdb, 6 .DAT files, 5 artwork images.
-    assert_eq!(export.files().count(), 1 + 6 + 5);
+    // 1 export.pdb, 6 .DAT and 6 .EXT files, 5 artwork images.
+    assert_eq!(export.files().count(), 1 + 2 * 6 + 5);
+}
+
+/// rekordbox's `.EXT` cut to the tags ADR-020 writes: its header and its first four tags,
+/// which must be `PPTH PWV3 PCOB PCOB`, encoded with the total length of those alone.
+fn ext_prefix(ext: &AnlzFile) -> Vec<u8> {
+    let prefix = &ext.tags()[..4];
+    let codes: Vec<FourCc> = prefix.iter().map(Tag::fourcc).collect();
+    assert_eq!(
+        codes,
+        [FourCc::PPTH, FourCc::PWV3, FourCc::PCOB, FourCc::PCOB],
+        "rekordbox's .EXT prefix"
+    );
+    AnlzFile::new(ext.unknown_header().to_vec(), prefix.to_vec())
+        .to_bytes()
+        .expect("encodes")
 }

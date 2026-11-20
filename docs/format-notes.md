@@ -54,6 +54,46 @@ rekordbox-exported, CDJ-played stick.
 - **PWV3**: `len_header` 0x18; `len_entry_bytes` is 1, `len_entries` equals the body
   length and the u32 at 0x14 is `0x00960000` in all 826 `.EXT` files, as djl-analysis
   documents. Columns use all three whiteness bits (up to 7) and heights up to 31.
+  No PWV3 has a header or body tail (826 of 826, 6 of 6 on rekordbox-hw1).
+- **`.EXT` files** (`tests/anlz_local.rs::ext_files_survey`, both sticks; 826 tracks
+  with a `.DAT` and an `.EXT` on the old stick, 6 on hw1):
+  - **PMAI header:** always the modal `.DAT` header
+    (`00000001 00010000 00010000 00000000`) except in 3 files whose first word is 0;
+    their `.DAT` has first word 0 too. Of the 33 `.DAT` files with first word 0 (all
+    with an `.EXT`), 30 have a modal `.EXT`. So the two headers differ only in the first
+    word, and only one way: `.DAT` 0, `.EXT` 1. All 6 on hw1 are modal.
+  - **PWV3 length:** `ceil(frames · 150 / rate)` entries, which is
+    `ceil(ms · 150 / 1000)` of the length in whole ms: exact on all 6 hw1 tracks, whose
+    exact length comes from the same audio in `local-fixtures/mdma-export` (the AIFF
+    `COMM` chunk; `examples/mdma_export.rs::pwv3_length_against_the_exact_duration`).
+    From whole ms the rule can be one entry short when the exact length lies just past a
+    multiple of 20 ms; none of the 6 does. The `.DAT` has nothing exact: PQTZ ends at the
+    last beat, PWAV and PWV2 have fixed lengths. The pdb seconds only bound it: PWV3 is
+    0 to 150 entries longer than 150 × seconds on the old stick (148 distinct values),
+    exactly 150 longer for 91 tracks (2 of 6 on hw1).
+  - **Row seconds (open finding, the builder's row rule is unchanged):** the hw1 tracks of exactly 456,000 and 288,000 ms have PWV3s of
+    exactly 456 and 288 s (68,400 and 43,200 entries) but rows of 455 and 287 s. So
+    rekordbox's row duration is not `floor(ms / 1000)` for a whole-second length;
+    `ceil(ms / 1000) − 1` fits all 6. The 91 old-stick tracks exactly 150 entries long
+    are presumably whole-second lengths too.
+  - **Silence** is `0xe0`, height 0 and whiteness 7: every column of the one silent
+    track's PWV3 (154 columns; its PWAV is all `0xa2`), the last column of 732 of 826
+    files and the first of 523. Compare PWAV's `0xa2` (height 2) and PWV2's 1: PWV3
+    silence is height 0. Low columns have no modal whiteness (at height 0 whiteness 6 is
+    the most common, then 7).
+  - **PCOB:** rekordbox's `.EXT` cue lists hold no cues, in all 826 and all 6 files: they
+    are an empty hot cue list and an empty memory point list, byte for byte what
+    `CueList::hot([])` and `CueList::memory([])` write. They equal the `.DAT`'s only for
+    the tracks without cues (739 of 826, 2 of 6). The cues of the `.EXT` are presumably in
+    PCO2, not decoded here. `AnlzFile::track_ext` writes the same empty lists; the V0
+    hardware run used rekordbox's `.EXT` files, and the NXS showed the `.DAT`'s cues.
+  - **PWV5** has as many entries as PWV3 in 812 of 826 files and one more in 14 (all 6 on
+    hw1).
+- **Rebuilding `.EXT` prefixes**
+  (`tests/anlz_local.rs::ext_prefixes_rebuild_identically`): `AnlzFile::track_ext` from
+  each file's own PPTH and PWV3 columns (with empty PCOBs) gives rekordbox's `PPTH PWV3 PCOB PCOB` and
+  header for 823 of 826 (all 6 on hw1); the other 3 differ only in the header's first
+  word.
 - **Rebuilding `.DAT` files** (`tests/anlz_local.rs::real_stick_dat_files_rebuild_identically`):
   `AnlzFile::track_dat` from each file's typed tags gives 793 of 848 back byte for byte.
   The other 55 differ only in the PMAI header (30: the 22 stale files and the 8 AIFF
@@ -504,7 +544,9 @@ is no longer in the playlist or manifest, though its AIFF is still in the folder
   ms long, 1 s more than rekordbox's rows (455 and 287 s). MDMA's probe found the padding
   is in its source FLACs, and ffmpeg copies them sample for sample. rekordbox imported
   different copies of those tracks, so this is not a conversion artefact. The other 4
-  agree in whole seconds.
+  agree in whole seconds. (Later finding: rekordbox's PWV3s for tracks 3 and 4 are exactly
+  456 and 288 s long, so rekordbox's audio is likely the same length too, and its rows
+  hold one second less for a whole-second length; see "`.EXT` files" under ANLZ.)
 - **Bitrate:** rekordbox writes `rate · depth · channels / 1000`, rounded down (2,116 for
   24-bit stereo, 1,411 for 16-bit). The XML's `BitRate` matches that on 1 track only; the
   other 5 (803 to 1,560 kbps for 24-bit AIFF) are unexplained, perhaps the bitrates of
