@@ -1165,7 +1165,7 @@ mod tests {
         use std::collections::BTreeMap;
 
         use cdj_media::anlz::{AnlzFile, Beat, CueList};
-        use cdj_media::layout::{AnlzPath, export_pdb_path};
+        use cdj_media::layout::{StickPath, export_pdb_path};
         use cdj_media::pdb::model::Track;
         use cdj_media::pdb::{Database, Pdb};
 
@@ -1280,7 +1280,9 @@ mod tests {
                 .map(|p| ours.playlist_tracks(p.id()).count());
             assert_eq!(entries.collect::<Vec<_>>(), [7], "playlist entries");
             let dat_of = |id: TrackId| {
-                let bytes = export.file(&AnlzPath::for_track(id).dat()).expect(".DAT");
+                let row = ours.track(id).expect("the track row");
+                let path = StickPath::parse(row.analysis_path()).expect("a stick path");
+                let bytes = export.file(&path).expect(".DAT");
                 AnlzFile::from_bytes(bytes).expect("our .DAT decodes")
             };
             for t in ours.tracks() {

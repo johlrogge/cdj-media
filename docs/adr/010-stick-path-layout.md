@@ -14,7 +14,8 @@ Accepted
 
   It reproduces all 827 real slot-20 paths. Callers pass metadata, never a directory
   name another tool already chose for "unknown".
-- **Analysis paths** (slot 14) are derived from the track id, not from rekordbox's hash:
+- **Analysis paths** (superseded by ADR-019, which hashes them from the audio path as
+  rekordbox does). Slot 14 is derived from the track id, not from rekordbox's hash:
   `/PIONEER/USBANLZ/P{id & 0xFFF:03X}/{id:08X}/ANLZ0000.{DAT,EXT}`. The scheme is
   injective and reversible, so the hashed-directory collisions seen on the stick
   (`ANLZ0001`) can't happen. It keeps rekordbox's character set and shape. The low bits
@@ -36,6 +37,7 @@ Output should look like rekordbox's, except where rekordbox's own scheme causes
 collisions and missing analysis files.
 ## Alternatives considered
 - **Copy rekordbox's hashed ANLZ directories:** the hash is unknown, and it collides.
+  (Superseded by ADR-019, which recovered the hash and adopts it.)
 - **MDMA's "Unknown Artist":** doesn't match what rekordbox writes.
 ## Consequences
 - The slice 7 hardware test also covers a maximum-length path (three 48-unit

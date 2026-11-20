@@ -5,8 +5,9 @@
 //! - [`StickPath`]: a validated, FAT32-safe absolute path on the stick.
 //! - [`ContentPath`]: a track's audio file, `/Contents/<artist>/<album>/<file name>`, the
 //!   track row's file path (slot 20). Its last component is the filename (slot 19).
-//! - [`AnlzPath`]: a track's analysis files under `/PIONEER/USBANLZ/`, derived from the
-//!   track id. Its `.DAT` path is the analysis path (slot 14).
+//! - [`AnlzPath`]: a track's analysis files under `/PIONEER/USBANLZ/`, numbered in the
+//!   folder [`anlz_folder`] hashes from its audio file's path (ADR-019). Its `.DAT` path is
+//!   the analysis path (slot 14).
 //! - [`ArtworkPath`]: an artwork image under `/PIONEER/Artwork/`, derived from the artwork
 //!   id: what the artwork row holds.
 //! - [`ContentPathAllocator`]: makes the content paths of one stick distinct, as FAT32
@@ -21,7 +22,7 @@ mod content;
 mod stick_path;
 
 pub use allocator::ContentPathAllocator;
-pub use anlz::AnlzPath;
+pub use anlz::{AnlzPath, MAX_ANLZ_INDEX, anlz_folder};
 pub use artwork::ArtworkPath;
 pub use content::ContentPath;
 pub use stick_path::{MAX_COMPONENT_UNITS, MAX_PATH_UNITS, PathError, StickPath};

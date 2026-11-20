@@ -27,8 +27,8 @@ use crate::anlz::{
 use crate::encoding::{Bpm, Millis};
 use crate::error::{EncodeError, Error};
 use crate::layout::{
-    AnlzPath, ArtworkPath, ContentPath, ContentPathAllocator, StickPath, audio_path_tag,
-    export_pdb_path,
+    AnlzPath, ArtworkPath, ContentPath, ContentPathAllocator, StickPath, anlz_folder,
+    audio_path_tag, export_pdb_path,
 };
 use crate::pdb::model::{Dangling, RecordId, Reference};
 use crate::pdb::{ColorId, Database, ExportRow, FileType, PlaylistId, TrackFields, TrackId};
@@ -210,6 +210,8 @@ pub struct ExportBuilder {
     database: Database,
     /// The audio file paths allocated so far.
     paths: ContentPathAllocator,
+    /// The number of the next analysis file in each analysis folder used so far.
+    anlz_numbers: BTreeMap<StickPath, u16>,
     /// The `.DAT` files and artwork images of the tracks added, by path.
     files: BTreeMap<StickPath, Vec<u8>>,
     /// Each track's id and audio file path, in input order.
@@ -224,6 +226,7 @@ impl ExportBuilder {
             date,
             database: Database::new(),
             paths: ContentPathAllocator::new(),
+            anlz_numbers: BTreeMap::new(),
             files: BTreeMap::new(),
             destinations: Vec::new(),
         }
@@ -235,8 +238,10 @@ impl ExportBuilder {
     /// The paths come from [`layout`](crate::layout): the audio file's from
     /// [`ContentPath::for_track`] of the artist, album and file name, made distinct from
     /// earlier tracks' by [`ContentPathAllocator`] (slots 19 and 20, `PPTH` and the
-    /// destination all get that path); the `.DAT`'s from [`AnlzPath::for_track`] (slot 14);
-    /// the artwork's from [`ArtworkPath::for_artwork`], one artwork row per track. Names go
+    /// destination all get that path); the `.DAT`'s from [`AnlzPath::for_content`] of that
+    /// path (slot 14), numbered in input order within its folder ([`anlz_folder`]): the
+    /// first track in a folder gets `ANLZ0000`, the next `ANLZ0001` (ADR-019); the artwork's
+    /// from [`ArtworkPath::for_artwork`], one artwork row per track. Names go
     /// through the `find_or_insert_*` methods of [`Database`] exactly as given. The row's
     /// tempo is the grid's: [`Grid::Constant`]'s tempo even when the track is too short for
     /// a beat, the first beat's of [`Grid::Beats`], 0 otherwise. Its duration is the whole
@@ -255,6 +260,7 @@ impl ExportBuilder {
     /// - [`Grid::Constant`] of tempo 0 (`"grid tempo"`);
     /// - a duration of 65,536 s or more (`"track duration"`);
     /// - a colour the database has no row for (`"track color"`);
+    /// - a 10,001st track in one analysis folder, past `ANLZ9999` (`"analysis file number"`);
     ///
     /// [`EncodeError::LengthOverflow`] (`"pdb page heap"`) when the track's row, or the row
     /// of one of its names, doesn't fit an empty page, as [`Database::to_pdb`] would refuse
@@ -276,11 +282,18 @@ impl ExportBuilder {
                 context: "audio file name",
             });
         }
-        // Everything that can fail is done before anything changes: the path is peeked and
-        // only allocated once the `.DAT` and the row are known to encode.
+        // Everything that can fail is done before anything changes: the path and the
+        // analysis file number are peeked and only taken once the `.DAT` and the row are
+        // known to encode.
         let content = self.paths.peek(&own);
         let id = self.database.next_track_id();
-        let dat_path = AnlzPath::for_track(id).dat();
+        let folder = anlz_folder(&content);
+        let number = self.anlz_numbers.get(&folder).copied().unwrap_or(0);
+        let dat_path = AnlzPath::for_content(&content, number)
+            .ok_or(EncodeError::ValueOutOfRange {
+                context: "analysis file number",
+            })?
+            .dat();
         let (preview, tiny) = match track.waveform {
             Waveform::Flat => (
                 WaveformPreview::flat(FLAT_PREVIEW_HEIGHT),
@@ -367,6 +380,8 @@ impl ExportBuilder {
         // Nothing fails from here on.
         let allocated = self.paths.allocate(own);
         assert_eq!(allocated, content, "allocate gives the peeked path");
+        // At most `MAX_ANLZ_INDEX`, which `for_content` took, so this doesn't overflow.
+        self.anlz_numbers.insert(folder, number + 1);
         let db = &mut self.database;
         let artist_id = db.find_or_insert_artist(&track.artist);
         let composer_id = db.find_or_insert_artist(&track.composer);
