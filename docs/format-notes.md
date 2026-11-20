@@ -457,17 +457,19 @@ Checked by `tests/artwork_local.rs`, shapes only (letters masked outside the pre
 
 ## MDMA export vs rekordbox (hw1)
 
-`local-fixtures/mdma-export` is MDMA's export of 7 tracks (`rekordbox.xml`, `manifest.tsv`,
-one timeline JSON per track, and the AIFF files). 6 of them are the tracks of
-`rekordbox-hw1`; the seventh, a 1 s test track, is not on that stick. Checked by the local
-test in `examples/mdma_export.rs`, which builds the export in memory with `ExportBuilder` and
-matches tracks to rekordbox's by title. Tracks are numbered by manifest line (1 to 7), which
-is also their id in the built export.
+`local-fixtures/mdma-export` is MDMA's export of 6 tracks (`rekordbox.xml`, `manifest.tsv`,
+one timeline JSON per track, and the AIFF files), the tracks of `rekordbox-hw1`. Checked by
+the local test in `examples/mdma_export.rs`, which builds the export in memory with
+`ExportBuilder` and matches tracks to rekordbox's by title. It asserts that the export has as
+many tracks as the manifest and the XML playlist, each with a `.DAT`, and that every matched
+grid agrees with rekordbox's (bar positions, and beat times within 1 ms). Keys are MDMA's
+data, so they are compared but not asserted. Tracks are numbered by manifest line (1 to 6), which
+is also their id in the built export. (An earlier export had a 1 s test track as well; it
+is no longer in the playlist or manifest, though its AIFF is still in the folder.)
 
 - **Inputs agree with each other.** The XML's `POSITION_MARK`s equal the timelines' cues on
-  all 7 tracks (same slots, order and milliseconds). The timelines' `duration_ms` equals the
-  AIFF header's `frames · 1000 / rate` (rounded down) on 6 of 7; on the 1 s test track it is
-  2 ms longer (1,023 against 1,021).
+  all 6 tracks (same slots, order and milliseconds). The timelines' `duration_ms` equals the
+  AIFF header's `frames · 1000 / rate` (rounded down) on all 6.
 - **Equal on all 6:** artist, album and genre names; year; track number; sample rate; tempo
   (to the hundredth of a BPM); hot cue count and positions (7 cues, |Δ| 0 ms); memory cue
   count and positions (15 cues, |Δ| 0 ms, compared sorted).
@@ -479,22 +481,25 @@ is also their id in the built export.
 | sample rate       | 6     | 0      | 0          |
 | sample depth      | 3     | 3      | 8 bits     |
 | bitrate           | 3     | 3      | 705 kbps   |
-| file size         | 0     | 6      | 40,218,588 |
-| key               | 4     | 2      | -          |
+| file size         | 0     | 6      | 40,218,618 |
+| key (as stored)   | 4     | 2      | -          |
+| key (Camelot)     | 5     | 1      | -          |
 | label             | 5     | 1      | -          |
 | year              | 6     | 0      | 0          |
 | artist/album/genre| 6     | 0      | -          |
 | hot cues          | 6     | 0      | 0 ms       |
 | memory cues       | 6     | 0      | 0 ms       |
-| beat count        | 4     | 2      | 1          |
+| beat count        | 5     | 1      | 1          |
 | beat times (±1)   | 6     | 0      | 1 ms       |
-| bar positions     | 2     | 4      | -          |
+| bar positions     | 6     | 0      | -          |
+| leading beat at 0 | 1     | -      | -          |
 
 - **The audio files are not rekordbox's.** Tracks 1, 2 and 6 are 24-bit on both sticks and
   MDMA's files are 52 bytes larger each. MDMA's own probe found these are the BPM and key
   tags it adds, as TXXX frames. Tracks 3, 4 and 5 are 16-bit on the rekordbox stick and
-  24-bit in MDMA's export, about 50% larger, because MDMA always writes 24-bit (being
-  fixed). So file size and depth are expected to differ.
+  24-bit in MDMA's export, about 50% larger, because MDMA writes 24-bit. MDMA's AIFF
+  changes are not deployed yet, so file size and depth are expected to differ until they
+  are.
 - **Duration:** tracks 3 and 4, two of the converted files, are exactly 456,000 and 288,000
   ms long, 1 s more than rekordbox's rows (455 and 287 s). MDMA's probe found the padding
   is in its source FLACs, and ffmpeg copies them sample for sample. rekordbox imported
@@ -506,15 +511,21 @@ is also their id in the built export.
   MDMA's source files. So the example computes the bitrate from the `COMM` chunk and ignores
   the XML's. It then equals rekordbox's on the 3 tracks whose depth agrees and differs only
   on the 3 converted files (2,116 against 1,411).
-- **Key:** the 2 differences are the tracks with no `Tonality`: ours empty, rekordbox's
-  `Abm` and `C` (not Camelot; rekordbox's other 4 keys are Camelot and equal ours).
+- **Key:** every track now has a `Tonality`, in Camelot. As stored it equals rekordbox's
+  on 4. On tracks 3 and 5 rekordbox's key is in standard notation, so the test maps
+  standard names to Camelot before comparing: `Abm` is `1A`, equal to ours. Track 5 is
+  `C` (C major, `8B`) in the old rekordbox export and C minor (`5A`) in MDMA. The
+  `rekordbox-hw1` export predates rekordbox's re-analysis, and the key is MDMA's data, so
+  this is not a cdj-media difference.
 - **Label:** one track has a label in the XML; rekordbox's export has no label rows.
-- **Beat grids:** every one of our beats is within 1 ms of rekordbox's nearest beat, and the
-  first beats are at the same millisecond on all 6. Tracks 2 and 6 have one beat fewer
-  than rekordbox's, at the end: rekordbox's grid runs a little past the AIFF length.
-- **First beat is not always a downbeat.** `Grid::Constant` numbers MDMA's `first_beat_ms`
-  as beat 1. rekordbox agrees on tracks 4 and 5 only. It numbers that beat 4 on track 1
-  and beat 2 on tracks 2, 3 and 6, so every bar position on those 4 grids is off, with no
-  time offset (0 ms). To match rekordbox, the caller would pass the time of rekordbox's
-  downbeat (one beat later on track 1, three beats later on the others) as the first beat;
-  `constant_tempo` already extends the grid back to 0.
+- **Downbeat:** MDMA's `first_beat_ms` is now the first beat of a bar, and rekordbox
+  numbers it beat 1 on all 6, so bar positions agree and every beat is within 1 ms of
+  rekordbox's nearest. On track 2 our grid has one leading beat at 0 ms that rekordbox's
+  lacks (its grid starts one beat later). That is rounding at the 0 boundary: MDMA's
+  whole-millisecond downbeat puts the beat 4 earlier at about +0.5 ms, rekordbox's finer
+  phase puts it just below 0. `constant_tempo` keeps its rule of starting at the earliest
+  beat at or after 0 (rekordbox's own first beat is at 0 ms in 85 of 830 fixture grids), and
+  the test leaves out one such leading beat of ours if it is at ≤ 1 ms. Track 6 has one beat
+  fewer than rekordbox's, at the end: rekordbox's grid runs a little past the AIFF length.
+- **No grid:** MDMA gives a strongly variable-tempo track no grid (`grid` null), which the
+  example writes as `Grid::None`. None of these 6 is such a track.

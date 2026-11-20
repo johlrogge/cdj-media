@@ -1165,6 +1165,7 @@ mod tests {
         use std::collections::BTreeMap;
 
         use cdj_media::anlz::{AnlzFile, Beat, CueList};
+        use cdj_media::encoding::BeatInBar;
         use cdj_media::layout::{StickPath, export_pdb_path};
         use cdj_media::pdb::model::Track;
         use cdj_media::pdb::{Database, Pdb};
@@ -1246,6 +1247,171 @@ mod tests {
             }
         }
 
+        /// Our grid against rekordbox's.
+        #[derive(Debug, PartialEq, Eq)]
+        struct GridMatch {
+            /// Ours has one leading beat at ≤ 1 ms that rekordbox lacks, left out of the rest.
+            leading: bool,
+            /// The largest |Δ| from each of our other beats to rekordbox's nearest.
+            max: u64,
+            /// How many of our other beats have the bar position of rekordbox's nearest.
+            bars_agree: usize,
+            /// How many of our beats were compared.
+            compared: usize,
+        }
+
+        impl GridMatch {
+            fn agrees(&self) -> bool {
+                self.max <= 1 && self.bars_agree == self.compared
+            }
+        }
+
+        /// Compares two non-empty grids, beat by beat against rekordbox's nearest. One leading
+        /// beat of ours at ≤ 1 ms is left out when rekordbox has no beat within 1 ms of it:
+        /// rounding at 0 puts it just above 0 for us and just below for rekordbox.
+        fn match_grids(ours: &[Beat], rb: &[Beat]) -> GridMatch {
+            let first = ours[0].time().get();
+            let leading =
+                first <= 1 && diff(first.into(), nearest(rb, first).time().get().into()) > 1;
+            let ours = if leading { &ours[1..] } else { ours };
+            let mut max = 0;
+            let mut bars_agree = 0;
+            for b in ours {
+                let n = nearest(rb, b.time().get());
+                max = max.max(diff(b.time().get().into(), n.time().get().into()));
+                bars_agree += usize::from(n.bar_position() == b.bar_position());
+            }
+            GridMatch {
+                leading,
+                max,
+                bars_agree,
+                compared: ours.len(),
+            }
+        }
+
+        /// A grid at 120 BPM (500 ms a beat) of `count` beats from `first` ms, bar position
+        /// `bar` (1 to 4) first.
+        fn grid(first: u32, bar: u16, count: u16) -> Vec<Beat> {
+            (0..count)
+                .map(|k| {
+                    Beat::new(
+                        BeatInBar::new((bar - 1 + k) % 4 + 1).unwrap(),
+                        Bpm::from_centi(12_000),
+                        Millis::new(first + 500 * u32::from(k)),
+                    )
+                })
+                .collect()
+        }
+
+        #[test]
+        fn equal_grids_agree() {
+            let m = match_grids(&grid(10, 2, 8), &grid(10, 2, 8));
+            assert_eq!(
+                (m.leading, m.max, m.bars_agree, m.compared),
+                (false, 0, 8, 8)
+            );
+            assert!(m.agrees());
+            let off = match_grids(&grid(10, 2, 8), &grid(10, 3, 8));
+            assert!(!off.agrees(), "bar positions differ");
+            let late = match_grids(&grid(10, 2, 8), &grid(12, 2, 8));
+            assert!(!late.agrees(), "2 ms apart");
+        }
+
+        #[test]
+        fn one_leading_beat_at_0_that_rekordbox_lacks_is_left_out() {
+            let ours = grid(0, 1, 9);
+            let rb = grid(500, 2, 8);
+            let m = match_grids(&ours, &rb);
+            assert_eq!(
+                (m.leading, m.max, m.bars_agree, m.compared),
+                (true, 0, 8, 8)
+            );
+            assert!(m.agrees());
+            let one = match_grids(&grid(1, 1, 9), &grid(501, 2, 8));
+            assert!(one.leading && one.agrees(), "at 1 ms");
+        }
+
+        #[test]
+        fn a_leading_beat_later_than_1_ms_is_refused() {
+            let m = match_grids(&grid(5, 1, 9), &grid(505, 2, 8));
+            assert!(!m.leading);
+            assert!(!m.agrees());
+        }
+
+        #[test]
+        fn only_one_leading_beat_is_left_out() {
+            // Ours has two beats, at 0 and 500 ms, before rekordbox's first: the one at
+            // 500 ms is compared and differs.
+            let m = match_grids(&grid(0, 1, 10), &grid(1000, 3, 8));
+            assert!(!m.agrees());
+        }
+
+        #[test]
+        fn a_leading_beat_rekordbox_also_has_is_compared() {
+            let m = match_grids(&grid(0, 1, 8), &grid(1, 1, 8));
+            assert_eq!((m.leading, m.max, m.compared), (false, 1, 8));
+            assert!(m.agrees());
+        }
+
+        /// The Camelot code of a key name in standard notation (`Abm`, `C`); Camelot codes
+        /// and unknown names as they are.
+        fn camelot(name: &str) -> &str {
+            const TABLE: [(&str, &str); 34] = [
+                ("Abm", "1A"),
+                ("G#m", "1A"),
+                ("Ebm", "2A"),
+                ("D#m", "2A"),
+                ("Bbm", "3A"),
+                ("A#m", "3A"),
+                ("Fm", "4A"),
+                ("Cm", "5A"),
+                ("Gm", "6A"),
+                ("Dm", "7A"),
+                ("Am", "8A"),
+                ("Em", "9A"),
+                ("Bm", "10A"),
+                ("F#m", "11A"),
+                ("Gbm", "11A"),
+                ("Dbm", "12A"),
+                ("C#m", "12A"),
+                ("B", "1B"),
+                ("F#", "2B"),
+                ("Gb", "2B"),
+                ("Db", "3B"),
+                ("C#", "3B"),
+                ("Ab", "4B"),
+                ("G#", "4B"),
+                ("Eb", "5B"),
+                ("D#", "5B"),
+                ("Bb", "6B"),
+                ("A#", "6B"),
+                ("F", "7B"),
+                ("C", "8B"),
+                ("G", "9B"),
+                ("D", "10B"),
+                ("A", "11B"),
+                ("E", "12B"),
+            ];
+            TABLE
+                .iter()
+                .find(|(standard, _)| *standard == name)
+                .map_or(name, |(_, code)| code)
+        }
+
+        #[test]
+        fn key_names_map_to_camelot() {
+            assert_eq!(camelot("Abm"), "1A");
+            assert_eq!(camelot("G#m"), "1A");
+            assert_eq!(camelot("Cm"), "5A");
+            assert_eq!(camelot("C"), "8B");
+            assert_eq!(camelot("F#"), "2B");
+            assert_eq!(camelot("Gb"), "2B");
+            assert_eq!(camelot("E"), "12B");
+            assert_eq!(camelot("C#m"), "12A");
+            assert_eq!(camelot("3A"), "3A");
+            assert_eq!(camelot(""), "");
+        }
+
         fn name<T>(of: Option<&T>, name: impl Fn(&T) -> &str) -> String {
             of.map_or(String::new(), |x| name(x).to_owned())
         }
@@ -1273,12 +1439,23 @@ mod tests {
             let prepared = prepare(&dir, date).expect("prepares");
             let export = prepared.builder.build().expect("the export builds");
             let ours = load(export.file(&export_pdb_path()).expect("export.pdb"));
-            assert_eq!(ours.tracks().len(), 7, "tracks");
+            let manifest =
+                parse_manifest(&fs::read_to_string(dir.join("manifest.tsv")).unwrap()).unwrap();
+            let library =
+                parse_xml(&fs::read_to_string(dir.join("rekordbox.xml")).unwrap()).unwrap();
+            assert_eq!(library.tracks.len(), manifest.len(), "XML tracks");
+            let xml_entries: Vec<usize> = library.playlists.iter().map(|p| p.keys.len()).collect();
+            assert_eq!(xml_entries, [manifest.len()], "XML playlist entries");
+            assert_eq!(ours.tracks().len(), manifest.len(), "tracks");
             assert_eq!(ours.playlists().len(), 1, "playlists");
             let entries = ours
                 .playlists()
                 .map(|p| ours.playlist_tracks(p.id()).count());
-            assert_eq!(entries.collect::<Vec<_>>(), [7], "playlist entries");
+            assert_eq!(
+                entries.collect::<Vec<_>>(),
+                [manifest.len()],
+                "playlist entries"
+            );
             let dat_of = |id: TrackId| {
                 let row = ours.track(id).expect("the track row");
                 let path = StickPath::parse(row.analysis_path()).expect("a stick path");
@@ -1301,10 +1478,6 @@ mod tests {
 
             // The XML's POSITION_MARKs against the timelines' cues, and the timelines'
             // durations against the AIFF headers'.
-            let manifest =
-                parse_manifest(&fs::read_to_string(dir.join("manifest.tsv")).unwrap()).unwrap();
-            let library =
-                parse_xml(&fs::read_to_string(dir.join("rekordbox.xml")).unwrap()).unwrap();
             let joined = join(&manifest, &library.tracks).unwrap();
             let mut marks_agree = 0;
             let mut duration_delta = Stat::default();
@@ -1336,6 +1509,10 @@ mod tests {
             let mut matched = 0;
             let mut grid_rows = Vec::new();
             let mut detail_rows = Vec::new();
+            let mut grids_differ = Vec::new();
+            // Tracks whose grid starts with a beat at 0 ms that rekordbox lacks, under
+            // "equal" (always shown).
+            stat(&mut table, "leading beat at 0");
             for r in rb.tracks() {
                 let Some(o) = ours.tracks().find(|o| o.title() == r.title()) else {
                     continue;
@@ -1378,12 +1555,10 @@ mod tests {
                     if rn[3].is_empty() { "empty" } else { "set" },
                 ));
                 let fields = ["artist", "album", "genre", "label", "key"];
-                for (field, (a, b)) in fields
-                    .into_iter()
-                    .zip(names(&ours, o).iter().zip(names(&rb, r).iter()))
-                {
+                for (field, (a, b)) in fields.into_iter().zip(on.iter().zip(rn.iter())) {
                     stat(&mut table, field).same(a == b);
                 }
+                stat(&mut table, "key after notation").same(camelot(&on[4]) == camelot(&rn[4]));
 
                 let rb_dat = AnlzFile::from_bytes(
                     &fs::read(rb_root.join(r.analysis_path().trim_start_matches('/'))).unwrap(),
@@ -1423,21 +1598,27 @@ mod tests {
                     ));
                     continue;
                 }
-                let mut max = 0;
-                let mut bars_agree = 0;
-                for b in our_beats {
-                    let n = nearest(rb_beats, b.time().get());
-                    max = max.max(diff(b.time().get().into(), n.time().get().into()));
-                    bars_agree += usize::from(n.bar_position() == b.bar_position());
+                let m = match_grids(our_beats, rb_beats);
+                let GridMatch {
+                    leading,
+                    max,
+                    bars_agree,
+                    compared,
+                } = m;
+                if leading {
+                    stat(&mut table, "leading beat at 0").same(true);
                 }
                 stat(&mut table, "beat ms (±1)").delta(max, 1);
-                stat(&mut table, "beat bar positions").same(bars_agree == our_beats.len());
+                stat(&mut table, "beat bar positions").same(bars_agree == compared);
+                if !m.agrees() {
+                    grids_differ.push(o.id().get());
+                }
                 let first = first_beats[&o.id()];
                 let at_first = nearest(rb_beats, first.get());
                 grid_rows.push(format!(
                     "track {}: beats ours {} rekordbox {}; first beat ours {} ms, rekordbox {} ms \
                      (beat {}); MDMA first_beat {} ms is rekordbox beat {} ({:+} ms); max |Δ| {} ms; \
-                     bar positions agree {}/{}",
+                     bar positions agree {}/{}{}",
                     o.id().get(),
                     our_beats.len(),
                     rb_beats.len(),
@@ -1449,7 +1630,12 @@ mod tests {
                     i64::from(at_first.time().get()) - i64::from(first.get()),
                     max,
                     bars_agree,
-                    our_beats.len(),
+                    compared,
+                    if leading {
+                        "; our leading beat at 0 left out"
+                    } else {
+                        ""
+                    },
                 ));
             }
             eprintln!(
@@ -1470,6 +1656,11 @@ mod tests {
             assert_eq!(
                 matched, 6,
                 "the rekordbox tracks are all in the MDMA export"
+            );
+            assert!(
+                grids_differ.is_empty(),
+                "tracks whose beats differ from rekordbox's by more than 1 ms or whose bar \
+                 positions differ: {grids_differ:?}"
             );
         }
     }
