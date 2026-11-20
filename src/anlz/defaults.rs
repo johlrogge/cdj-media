@@ -5,9 +5,11 @@
 //! (`local-fixtures/real-stick`), checked by the local test
 //! `tests/anlz_local.rs::real_stick_defaults_are_modal`, which also prints every
 //! distribution. The survey covers the stick's 848 `.DAT` files: 1,696 `PCOB` tags and 604
-//! `PCPT` entries (167 hot cues, 437 memory points). Of the `.EXT` files only `PWV3` is
-//! checked, by `real_stick_anlz_tag_orders`. The `.DAT` builder `AnlzFile::track_dat` as a
-//! whole is checked by `real_stick_dat_files_rebuild_identically`.
+//! `PCPT` entries (167 hot cues, 437 memory points). The `.EXT` files' `PWV3` is checked by
+//! `real_stick_anlz_tag_orders`, and their header and silence by `ext_files_survey`. The
+//! `.DAT` builder `AnlzFile::track_dat` as a whole is checked by
+//! `real_stick_dat_files_rebuild_identically`, and the `.EXT` builder `AnlzFile::track_ext`
+//! by `ext_prefixes_rebuild_identically`.
 //!
 //! The order links and `memory_count` of memory point lists are not defaults: the builders
 //! compute them (see `CueList::memory`), checked by
@@ -52,6 +54,18 @@ pub(crate) const PWV2_UNKNOWN1: u32 = 0x0001_0000;
 /// `PWV3` `unknown1` (offset 0x14): `0x00960000` in all 826 `.EXT` files, as djl-analysis
 /// documents. Checked by `real_stick_anlz_tag_orders`.
 pub(crate) const PWV3_UNKNOWN1: u32 = 0x0096_0000;
+
+/// Whiteness of the columns of a flat `PWV3` placeholder: 7. The one silent track on the
+/// fixture has a `PWV3` of 154 columns `0xe0` (height 0, whiteness 7), and `0xe0` is the
+/// last column of 732 of 826 `.EXT` files. Low columns have no modal whiteness. Checked by
+/// `tests/anlz_local.rs::ext_files_survey`.
+pub(crate) const PWV3_FLAT_WHITENESS: u8 = 7;
+
+/// The `.EXT` `PMAI` header bytes 12..28: the same bytes as [`PMAI_UNKNOWN_HEADER`] in 823
+/// of 826 `.EXT` files (all 6 on rekordbox-hw1), first word 0 in the rest. It differs from
+/// the `.DAT`'s only where the `.DAT`'s first word is 0 (33 files; 3 of their `.EXT` files
+/// have 0 too). Checked by `tests/anlz_local.rs::ext_files_survey`.
+pub(crate) const PMAI_EXT_UNKNOWN_HEADER: [u8; 16] = PMAI_UNKNOWN_HEADER;
 
 /// `PCOB` `unknown1` (offset 0x10): 0 in 1,694 of 1,696 lists, 3 in the rest. Checked by
 /// `real_stick_defaults_are_modal`.

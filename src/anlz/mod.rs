@@ -15,7 +15,8 @@
 //! `PPTH`, `PQTZ`, `PCOB`, `PWAV`, `PWV2` and `PWV3` are decoded into [`AudioPath`],
 //! [`BeatGrid`], [`CueList`], [`WaveformPreview`], [`TinyWaveformPreview`] and
 //! [`WaveformDetail`] (see ADR-004); every other tag is kept as a [`RawTag`].
-//! [`AnlzFile::track_dat`] builds a whole `.DAT` file from typed values.
+//! [`AnlzFile::track_dat`] builds a whole `.DAT` file from typed values, and
+//! [`AnlzFile::track_ext`] the Phase 1 part of an `.EXT` file.
 
 mod beat_grid;
 mod cues;
@@ -85,16 +86,7 @@ impl AnlzFile {
         preview: WaveformPreview,
         tiny_preview: TinyWaveformPreview,
     ) -> Result<Self, EncodeError> {
-        if hot_cues.kind() != CueListKind::Hot {
-            return Err(EncodeError::ValueOutOfRange {
-                context: "PCOB hot cue list kind",
-            });
-        }
-        if memory_cues.kind() != CueListKind::Memory {
-            return Err(EncodeError::ValueOutOfRange {
-                context: "PCOB memory point list kind",
-            });
-        }
+        check_cue_kinds(&hot_cues, &memory_cues)?;
         let vbr = RawTag::new(
             FourCc::PVBR,
             defaults::PVBR_HEADER.to_vec(),
@@ -113,6 +105,27 @@ impl AnlzFile {
                 Tag::Cues(memory_cues),
             ],
         ))
+    }
+
+    /// Builds a track's `.EXT` file with the tags of Phase 1 (ADR-020): `PPTH`, `PWV3` and
+    /// `PCOB` twice (an empty hot cue list, then an empty memory point list), in rekordbox's
+    /// order, after rekordbox's `.EXT` file header. rekordbox's files go on with `PCO2`,
+    /// `PWV4`, `PWV5` and others, which this crate doesn't write.
+    ///
+    /// Pass the `path` given to [`track_dat`](Self::track_dat), so both files hold the same
+    /// `PPTH`. The cue lists are always empty: rekordbox's `.EXT` lists hold no cues in any
+    /// fixture file, and the players read the cues from the `.DAT`. Callers without waveform
+    /// data can pass [`WaveformDetail::flat`].
+    pub fn track_ext(path: AudioPath, detail: WaveformDetail) -> Self {
+        Self::new(
+            defaults::PMAI_EXT_UNKNOWN_HEADER.to_vec(),
+            vec![
+                Tag::Path(path),
+                Tag::WaveformDetail(detail),
+                Tag::Cues(CueList::hot([])),
+                Tag::Cues(CueList::memory([])),
+            ],
+        )
     }
 
     /// The file-header bytes `12..len_header`, which are not understood.
@@ -263,6 +276,22 @@ impl AnlzFile {
         w.patch_len_since(len_file, start, "PMAI len_file")?;
         Ok(w.into_inner())
     }
+}
+
+/// Checks that `hot` is a hot cue list and `memory` a memory point list, as the builders
+/// write them.
+fn check_cue_kinds(hot: &CueList, memory: &CueList) -> Result<(), EncodeError> {
+    if hot.kind() != CueListKind::Hot {
+        return Err(EncodeError::ValueOutOfRange {
+            context: "PCOB hot cue list kind",
+        });
+    }
+    if memory.kind() != CueListKind::Memory {
+        return Err(EncodeError::ValueOutOfRange {
+            context: "PCOB memory point list kind",
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -574,6 +603,41 @@ mod tests {
 
         let bytes = file.to_bytes().unwrap();
         assert_round_trip(&bytes, &file);
+    }
+
+    #[test]
+    fn track_ext_writes_rekordbox_prefix_and_header() {
+        let point = |ms| CueSpan::Point(crate::encoding::Millis::new(ms));
+        let detail = WaveformDetail::new(vec![0xe0, 0x45, 0xff]);
+        let file = AnlzFile::track_ext(AudioPath::new("/Contents/a/b/c.aiff"), detail.clone());
+
+        assert_eq!(
+            file.unknown_header(),
+            [0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+        );
+        let codes: Vec<FourCc> = file.tags().iter().map(Tag::fourcc).collect();
+        assert_eq!(
+            codes,
+            [FourCc::PPTH, FourCc::PWV3, FourCc::PCOB, FourCc::PCOB]
+        );
+        assert_eq!(file.path(), Some("/Contents/a/b/c.aiff"));
+        assert_eq!(file.waveform_detail(), Some(&detail));
+        // Empty cue lists, as rekordbox writes in every `.EXT`: the cues are in the `.DAT`.
+        assert_eq!(file.tags()[2], Tag::Cues(CueList::hot([])));
+        assert_eq!(file.tags()[3], Tag::Cues(CueList::memory([])));
+        assert_round_trip(&file.to_bytes().unwrap(), &file);
+
+        // The same PPTH bytes as the track's `.DAT`.
+        let dat = AnlzFile::track_dat(
+            AudioPath::new("/Contents/a/b/c.aiff"),
+            BeatGrid::new(vec![]),
+            CueList::hot([(HotCueSlot::B, point(5))]),
+            CueList::memory([point(2), point(3)]),
+            WaveformPreview::flat(2),
+            TinyWaveformPreview::flat(1),
+        )
+        .unwrap();
+        assert_eq!(file.tags()[0], dat.tags()[0]);
     }
 
     #[test]

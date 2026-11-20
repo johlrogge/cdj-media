@@ -1164,7 +1164,7 @@ mod tests {
 
         use std::collections::BTreeMap;
 
-        use cdj_media::anlz::{AnlzFile, Beat, CueList};
+        use cdj_media::anlz::{AnlzFile, Beat, CueList, WaveformDetail};
         use cdj_media::encoding::BeatInBar;
         use cdj_media::layout::{StickPath, export_pdb_path};
         use cdj_media::pdb::model::Track;
@@ -1427,6 +1427,61 @@ mod tests {
             ]
         }
 
+        /// Measures rekordbox's PWV3 length against the exact length of the same audio, the
+        /// MDMA export's AIFF header, for ADR-020. Prints numbers only.
+        #[test]
+        fn pwv3_length_against_the_exact_duration() {
+            let (Some(dir), Some(rb_root)) = (
+                common::local_fixture("mdma-export"),
+                common::local_fixture("rekordbox-hw1"),
+            ) else {
+                return;
+            };
+            let manifest =
+                parse_manifest(&fs::read_to_string(dir.join("manifest.tsv")).unwrap()).unwrap();
+            let library =
+                parse_xml(&fs::read_to_string(dir.join("rekordbox.xml")).unwrap()).unwrap();
+            let joined = join(&manifest, &library.tracks).unwrap();
+            let rb = load(&fs::read(rb_root.join("PIONEER/rekordbox/export.pdb")).unwrap());
+            let mut rows = Vec::new();
+            let (mut matched, mut from_frames, mut from_ms) = (0, 0, 0);
+            for (number, (line, &at)) in manifest.iter().zip(&joined).enumerate() {
+                let title = library.tracks[at].name.as_str();
+                let Some(r) = rb.tracks().find(|r| r.title() == title) else {
+                    continue;
+                };
+                let aiff = read_aiff(&mut File::open(dir.join(&line.audio)).unwrap()).unwrap();
+                let ext = rb_root
+                    .join(r.analysis_path().trim_start_matches('/'))
+                    .with_extension("EXT");
+                let ext = AnlzFile::from_bytes(&fs::read(ext).unwrap()).unwrap();
+                let count = ext.waveform_detail().expect("PWV3").data().len() as u64;
+                let (frames, rate) = (u64::from(aiff.frames), u64::from(aiff.sample_rate));
+                let ms = u64::from(aiff.duration_ms());
+                matched += 1;
+                from_frames += usize::from((frames * 150).div_ceil(rate) == count);
+                let entries = WaveformDetail::entries_for(Millis::new(aiff.duration_ms()));
+                from_ms += usize::from(entries as u64 == count);
+                rows.push(format!(
+                    "track {}: PWV3 {count}; frames {frames} at {rate} Hz, {ms} ms, row {} s; \
+                     frames·150/rate floor {} ceil {}; ms·150/1000 floor {} ceil {} round {}",
+                    number + 1,
+                    r.duration(),
+                    frames * 150 / rate,
+                    (frames * 150).div_ceil(rate),
+                    ms * 150 / 1000,
+                    (ms * 150).div_ceil(1000),
+                    (ms * 150 + 500) / 1000,
+                ));
+            }
+            let report = rows.join("\n");
+            // rekordbox's PWV3 has ceil(frames · 150 / rate) entries, which is
+            // `WaveformDetail::entries_for` of the length in whole ms, on all 6 tracks. Tracks 3 and 4
+            // are exactly 456 and 288 s long, and so are rekordbox's PWV3s: the same length,
+            // though their rows hold 455 and 287 s.
+            assert_eq!((matched, from_frames, from_ms), (6, 6, 6), "{report}");
+        }
+
         #[test]
         fn the_mdma_export_builds_and_compares_with_rekordbox() {
             let (Some(dir), Some(rb_root)) = (
@@ -1468,6 +1523,12 @@ mod tests {
                     dat.beat_grid().is_some(),
                     "every track has a .DAT with a PQTZ"
                 );
+                let dat_path = t.analysis_path().strip_suffix(".DAT").expect(".DAT");
+                let ext_path = StickPath::parse(&format!("{dat_path}.EXT")).unwrap();
+                let ext = export.file(&ext_path).expect("every track has an .EXT");
+                let ext = AnlzFile::from_bytes(ext).expect("our .EXT decodes");
+                assert_eq!(ext.path(), dat.path(), "the .EXT's PPTH is the .DAT's");
+                assert!(ext.waveform_detail().is_some(), "every .EXT has a PWV3");
             }
             eprintln!(
                 "built {} tracks, {} playlists, {} files",

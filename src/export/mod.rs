@@ -5,7 +5,8 @@
 //! pieces and duplicates none of them:
 //! - [`Database`] for `export.pdb` (ADR-016, ADR-017);
 //! - [`AnlzFile::track_dat`](crate::anlz::AnlzFile::track_dat) for each track's `.DAT`
-//!   (ADR-015);
+//!   (ADR-015), and [`AnlzFile::track_ext`](crate::anlz::AnlzFile::track_ext) for the
+//!   `.EXT` next to it (ADR-020);
 //! - [`BeatGrid::constant_tempo`](crate::anlz::BeatGrid::constant_tempo) for constant grids
 //!   (ADR-014);
 //! - [`layout`](crate::layout) for every path (ADR-010).
@@ -22,7 +23,7 @@ use std::path::Path;
 
 use crate::anlz::{
     AnlzFile, BeatGrid, ConstantGrid, CueList, CueSpan, HotCueSlot, TinyWaveformPreview,
-    WaveformPreview,
+    WaveformDetail, WaveformPreview,
 };
 use crate::encoding::{Bpm, Millis};
 use crate::error::{EncodeError, Error};
@@ -43,6 +44,10 @@ const FLAT_PREVIEW_HEIGHT: u8 = 2;
 /// The column height of [`Waveform::Flat`]'s `PWV2`: 1, as rekordbox writes for the one
 /// silent track on the real-stick fixture (ADR-015).
 const FLAT_TINY_PREVIEW_HEIGHT: u8 = 1;
+
+/// The column height of [`Waveform::Flat`]'s `PWV3`: 0, as rekordbox writes for the one
+/// silent track on the real-stick fixture (ADR-020).
+const FLAT_DETAIL_HEIGHT: u8 = 0;
 
 /// A calendar date, written as `YYYY-MM-DD` in the track rows' date added and analysis date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -114,15 +119,22 @@ pub enum Grid {
     Beats(BeatGrid),
 }
 
-/// A track's waveform previews (`PWAV` and `PWV2`).
+/// A track's waveforms: the previews (`PWAV` and `PWV2`, in the `.DAT`) and the detail
+/// (`PWV3`, in the `.EXT`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per track input, moved once; boxing would only make callers' code noisier"
+)]
 pub enum Waveform {
-    /// A flat placeholder, the default: [`WaveformPreview::flat`] of height 2 and
-    /// [`TinyWaveformPreview::flat`] of height 1, what rekordbox writes for a silent track.
+    /// A flat placeholder, the default, what rekordbox writes for a silent track:
+    /// [`WaveformPreview::flat`] of height 2, [`TinyWaveformPreview::flat`] of height 1 and
+    /// [`WaveformDetail::flat`] of height 0 over the track's duration (ADR-020).
     #[default]
     Flat,
-    /// Previews as given.
-    Previews(WaveformPreview, TinyWaveformPreview),
+    /// Waveforms as given. The detail's length is not checked against the duration; see
+    /// [`WaveformDetail::entries_for`] for rekordbox's.
+    Previews(WaveformPreview, TinyWaveformPreview, WaveformDetail),
 }
 
 /// What the caller knows about one track, for [`ExportBuilder::add_track`].
@@ -212,7 +224,7 @@ pub struct ExportBuilder {
     paths: ContentPathAllocator,
     /// The number of the next analysis file in each analysis folder used so far.
     anlz_numbers: BTreeMap<StickPath, u16>,
-    /// The `.DAT` files and artwork images of the tracks added, by path.
+    /// The `.DAT` and `.EXT` files and artwork images of the tracks added, by path.
     files: BTreeMap<StickPath, Vec<u8>>,
     /// Each track's id and audio file path, in input order.
     destinations: Vec<(TrackId, ContentPath)>,
@@ -240,7 +252,8 @@ impl ExportBuilder {
     /// earlier tracks' by [`ContentPathAllocator`] (slots 19 and 20, `PPTH` and the
     /// destination all get that path); the `.DAT`'s from [`AnlzPath::for_content`] of that
     /// path (slot 14), numbered in input order within its folder ([`anlz_folder`]): the
-    /// first track in a folder gets `ANLZ0000`, the next `ANLZ0001` (ADR-019); the artwork's
+    /// first track in a folder gets `ANLZ0000`, the next `ANLZ0001` (ADR-019), and its
+    /// `.EXT` goes next to it ([`AnlzPath::ext`], ADR-020); the artwork's
     /// from [`ArtworkPath::for_artwork`], one artwork row per track. Names go
     /// through the `find_or_insert_*` methods of [`Database`] exactly as given. The row's
     /// tempo is the grid's: [`Grid::Constant`]'s tempo even when the track is too short for
@@ -283,23 +296,24 @@ impl ExportBuilder {
             });
         }
         // Everything that can fail is done before anything changes: the path and the
-        // analysis file number are peeked and only taken once the `.DAT` and the row are
-        // known to encode.
+        // analysis file number are peeked and only taken once the `.DAT`, the `.EXT` and the
+        // row are known to encode.
         let content = self.paths.peek(&own);
         let id = self.database.next_track_id();
         let folder = anlz_folder(&content);
         let number = self.anlz_numbers.get(&folder).copied().unwrap_or(0);
-        let dat_path = AnlzPath::for_content(&content, number)
-            .ok_or(EncodeError::ValueOutOfRange {
+        let anlz_path =
+            AnlzPath::for_content(&content, number).ok_or(EncodeError::ValueOutOfRange {
                 context: "analysis file number",
-            })?
-            .dat();
-        let (preview, tiny) = match track.waveform {
+            })?;
+        let (dat_path, ext_path) = (anlz_path.dat(), anlz_path.ext());
+        let (preview, tiny, detail) = match track.waveform {
             Waveform::Flat => (
                 WaveformPreview::flat(FLAT_PREVIEW_HEIGHT),
                 TinyWaveformPreview::flat(FLAT_TINY_PREVIEW_HEIGHT),
+                WaveformDetail::flat(FLAT_DETAIL_HEIGHT, track.duration),
             ),
-            Waveform::Previews(preview, tiny) => (preview, tiny),
+            Waveform::Previews(preview, tiny, detail) => (preview, tiny, detail),
         };
         // The row's tempo is the grid's: a constant grid's tempo, even without beats, or
         // the first beat's (one tempo throughout, as rekordbox's grids have).
@@ -321,6 +335,9 @@ impl ExportBuilder {
                 (grid, tempo)
             }
         };
+        // The `.DAT` and the `.EXT` share their PPTH; the cues are in the `.DAT` only, and
+        // the `.EXT`'s lists are empty, as rekordbox's (ADR-020).
+        let ext = AnlzFile::track_ext(audio_path_tag(&content), detail).to_bytes()?;
         let dat = AnlzFile::track_dat(
             audio_path_tag(&content),
             grid,
@@ -417,6 +434,7 @@ impl ExportBuilder {
             .expect("the row encoded without its references");
         assert_eq!(added, id, "add_track allocates the peeked id");
         self.files.insert(dat_path, dat);
+        self.files.insert(ext_path, ext);
         if let Some((_, path, image)) = artwork {
             self.files.insert(path, image);
         }
@@ -588,8 +606,8 @@ pub struct Export {
 }
 
 impl Export {
-    /// Every file of the export, by path, in path order: `export.pdb`, one `.DAT` per track
-    /// and the artwork images.
+    /// Every file of the export, by path, in path order: `export.pdb`, one `.DAT` and one
+    /// `.EXT` per track, and the artwork images.
     pub fn files(&self) -> impl Iterator<Item = (&StickPath, &[u8])> + '_ {
         self.files
             .iter()
