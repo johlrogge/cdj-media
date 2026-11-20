@@ -21,12 +21,14 @@
 mod beat_grid;
 mod cues;
 pub(crate) mod defaults;
+mod envelope;
 mod path;
 mod tag;
 mod waveform;
 
 pub use beat_grid::{Beat, BeatGrid, ConstantGrid};
 pub use cues::{Cue, CueList, CueListKind, CueSpan, HotCueSlot};
+pub use envelope::{Bands, Envelope};
 pub use path::AudioPath;
 pub use tag::{FourCc, RawTag, Tag};
 pub use waveform::{

@@ -22,7 +22,7 @@ use std::io::{self, Write as _};
 use std::path::Path;
 
 use crate::anlz::{
-    AnlzFile, BeatGrid, ConstantGrid, CueList, CueSpan, HotCueSlot, TinyWaveformPreview,
+    AnlzFile, BeatGrid, ConstantGrid, CueList, CueSpan, Envelope, HotCueSlot, TinyWaveformPreview,
     WaveformDetail, WaveformPreview,
 };
 use crate::encoding::{Bpm, Millis};
@@ -122,10 +122,6 @@ pub enum Grid {
 /// A track's waveforms: the previews (`PWAV` and `PWV2`, in the `.DAT`) and the detail
 /// (`PWV3`, in the `.EXT`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "one per track input, moved once; boxing would only make callers' code noisier"
-)]
 pub enum Waveform {
     /// A flat placeholder, the default, what rekordbox writes for a silent track:
     /// [`WaveformPreview::flat`] of height 2, [`TinyWaveformPreview::flat`] of height 1 and
@@ -135,6 +131,10 @@ pub enum Waveform {
     /// Waveforms as given. The detail's length is not checked against the duration; see
     /// [`WaveformDetail::entries_for`] for rekordbox's.
     Previews(WaveformPreview, TinyWaveformPreview, WaveformDetail),
+    /// The caller's envelope, mapped by [`WaveformPreview::from_envelope`],
+    /// [`TinyWaveformPreview::from_envelope`] and [`WaveformDetail::from_envelope`]
+    /// (ADR-021). Its length must be [`WaveformDetail::entries_for`] the track's duration.
+    Envelope(Envelope),
 }
 
 /// What the caller knows about one track, for [`ExportBuilder::add_track`].
@@ -274,6 +274,8 @@ impl ExportBuilder {
     /// - a duration of 65,536 s or more (`"track duration"`);
     /// - a colour the database has no row for (`"track color"`);
     /// - a 10,001st track in one analysis folder, past `ANLZ9999` (`"analysis file number"`);
+    /// - [`Waveform::Envelope`] of another length than
+    ///   [`WaveformDetail::entries_for`] the duration (`"waveform envelope length"`);
     ///
     /// [`EncodeError::LengthOverflow`] (`"pdb page heap"`) when the track's row, or the row
     /// of one of its names, doesn't fit an empty page, as [`Database::to_pdb`] would refuse
@@ -314,6 +316,18 @@ impl ExportBuilder {
                 WaveformDetail::flat(FLAT_DETAIL_HEIGHT, track.duration),
             ),
             Waveform::Previews(preview, tiny, detail) => (preview, tiny, detail),
+            Waveform::Envelope(envelope) => {
+                if envelope.peak().len() != WaveformDetail::entries_for(track.duration) {
+                    return Err(EncodeError::ValueOutOfRange {
+                        context: "waveform envelope length",
+                    });
+                }
+                (
+                    WaveformPreview::from_envelope(&envelope),
+                    TinyWaveformPreview::from_envelope(&envelope),
+                    WaveformDetail::from_envelope(&envelope),
+                )
+            }
         };
         // The row's tempo is the grid's: a constant grid's tempo, even without beats, or
         // the first beat's (one tempo throughout, as rekordbox's grids have).

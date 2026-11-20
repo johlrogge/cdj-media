@@ -41,10 +41,10 @@ pub const TINY_PREVIEW_COLUMNS: usize = 100;
 const DETAIL_PER_SECOND: u64 = 150;
 
 /// Largest `PWAV` and `PWV3` column height: five bits.
-const MAX_HEIGHT: u8 = 0x1f;
+pub(super) const MAX_HEIGHT: u8 = 0x1f;
 
 /// Largest `PWV2` column height: four bits.
-const MAX_TINY_HEIGHT: u8 = 0x0f;
+pub(super) const MAX_TINY_HEIGHT: u8 = 0x0f;
 
 /// Field names of one preview tag, for error contexts.
 struct PreviewNames {

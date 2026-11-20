@@ -1,5 +1,5 @@
 use super::*;
-use crate::anlz::{AnlzFile, Beat, ConstantGrid, CueList, FourCc};
+use crate::anlz::{AnlzFile, Bands, Beat, ConstantGrid, CueList, Envelope, FourCc};
 use crate::encoding::BeatInBar;
 use crate::layout::{AnlzPath, ArtworkPath, audio_path_tag};
 use crate::pdb::{ArtworkId, Pdb, PlaylistId};
@@ -352,6 +352,62 @@ fn given_beats_and_previews_are_used_as_given() {
     let row = db.track(id).unwrap();
     assert_eq!(row.tempo(), Bpm::from_centi(12_050));
     assert_eq!(row.file_type(), FileType::Wav);
+}
+
+/// An envelope of `n` entries: a ramp, with bands whose high share rises along it.
+fn envelope(n: u16) -> Envelope {
+    let share = |i: u16| f32::from(i) / f32::from(n.max(2) - 1);
+    let peak = (0..n).map(share).collect::<Vec<_>>();
+    let bands = Bands {
+        low: (0..n).map(|i| 1.0 - share(i)).collect(),
+        mid: vec![0.5; usize::from(n)],
+        high: peak.clone(),
+    };
+    Envelope::new(peak, Some(bands)).unwrap()
+}
+
+/// An envelope becomes the `.DAT`'s PWAV and PWV2 and the `.EXT`'s PWV3, mapped by the
+/// `from_envelope` constructors.
+#[test]
+fn an_envelope_is_mapped_into_the_dat_and_the_ext() {
+    // 1,000 ms: 150 entries.
+    let envelope = envelope(150);
+    let mut builder = ExportBuilder::new(date());
+    let id = builder
+        .add_track(NewTrack {
+            duration: Millis::new(1_000),
+            waveform: Waveform::Envelope(envelope.clone()),
+            ..track("A", "B", "c.aiff")
+        })
+        .unwrap();
+    let export = builder.build().unwrap();
+    let file = dat(&export, id);
+    let preview = WaveformPreview::from_envelope(&envelope);
+    assert_ne!(preview, WaveformPreview::flat(2));
+    assert_eq!(file.waveform_preview(), Some(&preview));
+    assert_eq!(
+        file.tiny_waveform_preview(),
+        Some(&TinyWaveformPreview::from_envelope(&envelope))
+    );
+    assert_eq!(
+        ext(&export, id).waveform_detail(),
+        Some(&WaveformDetail::from_envelope(&envelope))
+    );
+}
+
+/// An envelope of another length than the track's PWV3 is refused, before anything changes.
+#[test]
+fn an_envelope_of_another_length_than_the_duration_is_refused() {
+    // `bad()` is 201,999 ms long: 30,300 entries.
+    assert_eq!(WaveformDetail::entries_for(bad().duration), 30_300);
+    for n in [0, 30_299, 30_301] {
+        let waveform = Waveform::Envelope(envelope(n));
+        assert_refused(NewTrack { waveform, ..bad() }, "waveform envelope length");
+    }
+    // The right length is accepted.
+    let waveform = Waveform::Envelope(envelope(30_300));
+    let mut builder = ExportBuilder::new(date());
+    assert!(builder.add_track(NewTrack { waveform, ..bad() }).is_ok());
 }
 
 fn point(ms: u32) -> CueSpan {
