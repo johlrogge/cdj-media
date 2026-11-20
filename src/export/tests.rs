@@ -53,7 +53,8 @@ fn file_gives_the_bytes_at_a_path() {
     for (path, bytes) in export.files() {
         assert_eq!(export.file(path), Some(bytes), "{path}");
     }
-    let absent = AnlzPath::for_track(TrackId::new(2).unwrap()).dat();
+    let other = ContentPath::for_track("Other", "Album", "02.aiff");
+    let absent = AnlzPath::for_content(&other, 0).unwrap().dat();
     assert_eq!(export.file(&absent), None);
 }
 
@@ -62,10 +63,12 @@ fn file_gives_the_bytes_at_a_path() {
 fn build_leaves_the_builder_usable() {
     let mut builder = ExportBuilder::new(date());
     let first = builder.build().unwrap();
-    let id = builder.add_track(track("A", "B", "1.aiff")).unwrap();
+    builder.add_track(track("A", "B", "1.aiff")).unwrap();
     let second = builder.build().unwrap();
     assert_eq!(first.files().count(), 1);
-    assert!(second.file(&AnlzPath::for_track(id).dat()).is_some());
+    let content = ContentPath::for_track("A", "B", "1.aiff");
+    let dat = AnlzPath::for_content(&content, 0).unwrap().dat();
+    assert!(second.file(&dat).is_some());
 }
 
 /// A track with only what a file needs.
@@ -84,9 +87,11 @@ fn track(artist: &str, album: &str, file_name: &str) -> NewTrack {
     }
 }
 
-/// The `.DAT` of track `id` in `export`, decoded.
+/// The `.DAT` of track `id` in `export`, at its row's analysis path, decoded.
 fn dat(export: &Export, id: TrackId) -> AnlzFile {
-    let path = AnlzPath::for_track(id).dat();
+    let db = database(export);
+    let path = StickPath::parse(db.track(id).expect("the track row").analysis_path())
+        .expect("a stick path");
     let bytes = export.file(&path).expect("a .DAT");
     AnlzFile::from_bytes(bytes).expect("decodes")
 }
@@ -102,7 +107,7 @@ fn a_track_gets_a_row_a_dat_and_an_audio_destination_that_agree() {
     let content = ContentPath::for_track("Björk", "Ålbum", "01 Ü.aiff");
     let destinations: Vec<_> = export.audio_destinations().collect();
     assert_eq!(destinations, [(id, &content)]);
-    let dat_path = AnlzPath::for_track(id).dat();
+    let dat_path = AnlzPath::for_content(&content, 0).unwrap().dat();
     let paths: Vec<&str> = export.files().map(|(p, _)| p.as_str()).collect();
     assert_eq!(paths, [dat_path.as_str(), EXPORT_PDB]);
 
@@ -731,6 +736,58 @@ fn write_to_refuses_and_overwrites_nothing_when_a_file_exists() {
     for (path, _) in export.files().filter(|(p, _)| **p != pdb) {
         assert!(!path.under(&root.0).exists(), "{path} was written");
     }
+}
+
+/// Two file names whose paths under `/Contents/A/B/` hash to the same analysis folder, found
+/// by search.
+fn names_sharing_a_folder() -> (String, String) {
+    let mut seen = std::collections::HashMap::new();
+    for i in 0.. {
+        let name = format!("{i}.aiff");
+        let folder = crate::layout::anlz_folder(&ContentPath::for_track("A", "B", &name));
+        if let Some(first) = seen.insert(folder, name.clone()) {
+            return (first, name);
+        }
+    }
+    unreachable!("200,003 folders")
+}
+
+/// Tracks whose paths hash to one folder share it, numbered in input order (ADR-019); a
+/// refused track takes no number. Each `.DAT`'s `PPTH` names its own audio file.
+#[test]
+fn tracks_sharing_a_folder_get_numbered_files() {
+    let (one, two) = names_sharing_a_folder();
+    let (first_path, second_path) = (
+        ContentPath::for_track("A", "B", &one),
+        ContentPath::for_track("A", "B", &two),
+    );
+    let folder = crate::layout::anlz_folder(&first_path);
+    assert_eq!(crate::layout::anlz_folder(&second_path), folder);
+
+    let mut builder = ExportBuilder::new(date());
+    let first = builder.add_track(track("A", "B", &one)).unwrap();
+    let refused = NewTrack {
+        grid: Grid::Constant {
+            first_beat: Millis::new(0),
+            tempo: Bpm::from_centi(0),
+        },
+        ..track("A", "B", &two)
+    };
+    assert!(builder.add_track(refused).is_err());
+    let second = builder.add_track(track("A", "B", &two)).unwrap();
+    let export = builder.build().unwrap();
+
+    let db = database(&export);
+    for (id, content, name) in [
+        (first, &first_path, "ANLZ0000"),
+        (second, &second_path, "ANLZ0001"),
+    ] {
+        let row = db.track(id).unwrap();
+        assert_eq!(row.analysis_path(), format!("{folder}/{name}.DAT"));
+        assert_eq!(row.file_path(), content.as_stick_path().as_str());
+        assert_eq!(dat(&export, id).path(), Some(row.file_path()));
+    }
+    assert_eq!(export.files().count(), 1 + 2);
 }
 
 /// Paths that are the same file on FAT32 go through the allocator, in input order, and the

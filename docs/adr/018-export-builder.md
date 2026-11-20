@@ -51,7 +51,8 @@ Paths come from the library, never from the caller:
 - **Audio:** `ContentPath::for_track(artist, album, file name)`. It goes through ADR-010's
   collision allocator, which is pure and stateful, runs in input order, and is built in this
   slice.
-- **Analysis:** `AnlzPath::for_track(id)` (ADR-010).
+- **Analysis:** `AnlzPath::for_track(id)` (ADR-010). Superseded by ADR-019:
+  `AnlzPath::for_content(path, index)`, numbered per folder in input order.
 - **Collisions:** `layout::ContentPathAllocator` applies ADR-010's rule in input order. Case
   folding is per character and one-for-one: a character folds to its upper case only when
   that is a single character, so `ö` = `Ö` but `ß` ≠ `SS`. This mimics FAT's upcase table.
@@ -202,7 +203,8 @@ The test checks two things:
 - the rebuilt `export.pdb` loads to a `Database` equal to the fixture's.
 
 Documented differences:
-- slot 14 is derived from the id, not hashed;
+- ~~slot 14 is derived from the id, not hashed;~~ superseded by ADR-019: slot 14 is hashed
+  as rekordbox hashes it, and the rebuilt rows equal the fixture's exactly;
 - the duration, if `floor(ms/1000)` of the supplied length differs from the row.
 
 The fixture holds no artwork images, so the test supplies a stand-in JPEG and compares only

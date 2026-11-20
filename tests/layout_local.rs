@@ -10,9 +10,9 @@ mod common;
 use std::collections::BTreeMap;
 
 use cdj_media::anlz::AnlzFile;
-use cdj_media::layout::{AnlzPath, ContentPath, StickPath, audio_path_tag};
+use cdj_media::layout::{AnlzPath, ContentPath, StickPath, anlz_folder, audio_path_tag};
 use cdj_media::pdb::model::Track;
-use cdj_media::pdb::{Database, Pdb, TrackId};
+use cdj_media::pdb::{Database, Pdb};
 
 const EXPORT: &str = "real-stick/PIONEER/rekordbox/export.pdb";
 
@@ -128,7 +128,7 @@ fn real_stick_analysis_paths_have_the_anlz_path_shape() {
     assert_eq!(shapes, expected);
 
     // The shape check accepts what `AnlzPath` writes, and only that shape.
-    let path = AnlzPath::for_track(TrackId::new(0xabc_def0).unwrap());
+    let path = AnlzPath::for_content(&ContentPath::for_track("A", "B", "c.aiff"), 0).unwrap();
     assert_eq!(
         rekordbox_anlz_shape(path.dat().as_str()),
         Some(("0000", "DAT"))
@@ -240,6 +240,127 @@ fn real_stick_content_paths_match_rekordbox() {
         ("artist true, album false".to_owned(), (27, 0)),
     ]);
     assert_eq!(counts, expected);
+}
+
+/// The `ANLZ*.DAT` files under `<root>/PIONEER/USBANLZ/P*/*/`, with their folder
+/// (`P…/…`) and file name.
+fn anlz_dats(root: &std::path::Path) -> Vec<(std::path::PathBuf, String, String)> {
+    let dirs = |dir: &std::path::Path| -> Vec<(std::path::PathBuf, String)> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<_> = entries
+            .map(|e| e.expect("read a directory entry"))
+            .filter_map(|e| Some((e.path(), e.file_name().into_string().ok()?)))
+            .collect();
+        out.sort();
+        out
+    };
+    let mut out = Vec::new();
+    for (p_dir, p) in dirs(&root.join("PIONEER/USBANLZ")) {
+        for (sub_dir, sub) in dirs(&p_dir) {
+            for (file, name) in dirs(&sub_dir) {
+                if name.starts_with("ANLZ") && name.ends_with(".DAT") {
+                    out.push((file, format!("{p}/{sub}"), name));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether `folder` (`P…/…`) is derived from a track id, as this crate's builder once
+/// wrote: `P{id & 0xFFF:03X}/{id:08X}`.
+fn id_derived(folder: &str) -> bool {
+    let Some((_, sub)) = folder.split_once('/') else {
+        return false;
+    };
+    u32::from_str_radix(sub, 16).is_ok_and(|id| format!("P{:03X}/{id:08X}", id & 0xfff) == folder)
+}
+
+/// The `ContentPath` of a `PPTH` path, if it is one: `/Contents/<artist>/<album>/<file>`
+/// that sanitising gives back unchanged.
+fn content_path_of(ppth: &str) -> Option<ContentPath> {
+    let rest = ppth.strip_prefix("/Contents/")?;
+    let [artist, album, file] = rest.split('/').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let path = ContentPath::for_track(artist, album, file);
+    (path.as_stick_path().as_str() == ppth).then_some(path)
+}
+
+/// ADR-019: every `.DAT` on every local stick (`local-fixtures/*/` and
+/// `local-fixtures/hw-runs/*/`), written by rekordbox or by a player, sits in
+/// `anlz_folder` of its `PPTH`, under the name `AnlzPath::for_content` gives its number.
+/// Files in folders derived from a track id, which this crate once wrote, are skipped and
+/// counted, as are files whose `PPTH` is not a content path, which `anlz_folder` doesn't
+/// take. Prints counts only.
+#[test]
+fn analysis_files_sit_in_the_hashed_folder_of_their_ppth() {
+    let Some(fixtures) = common::local_fixture("") else {
+        return;
+    };
+    let mut roots = Vec::new();
+    for parent in [fixtures.clone(), fixtures.join("hw-runs")] {
+        let Ok(entries) = std::fs::read_dir(&parent) else {
+            continue;
+        };
+        roots.extend(entries.map(|e| e.expect("read a directory entry").path()));
+    }
+    roots.sort();
+    let (mut hashed, mut named, mut own, mut mismatched, mut not_content) = (0, 0, 0, 0, 0);
+    let mut sticks = 0;
+    // The numbers in each folder of each stick.
+    let mut numbers: BTreeMap<(usize, String), Vec<u16>> = BTreeMap::new();
+    for (stick, root) in roots.iter().enumerate() {
+        let dats = anlz_dats(root);
+        sticks += usize::from(!dats.is_empty());
+        for (file, folder, name) in dats {
+            let bytes = std::fs::read(&file).expect("read a .DAT");
+            let anlz = AnlzFile::from_bytes(&bytes).expect("decode a .DAT");
+            let number: u16 = name
+                .strip_prefix("ANLZ")
+                .and_then(|n| n.strip_suffix(".DAT"))
+                .and_then(|n| n.parse().ok())
+                .expect("a numbered ANLZ file");
+            // `anlz_folder` takes only content paths; rekordbox also analysed files
+            // elsewhere on the stick, which are counted, not checked.
+            let content = anlz.path().and_then(content_path_of);
+            let path = format!("/PIONEER/USBANLZ/{folder}");
+            match content {
+                Some(content) if anlz_folder(&content).as_str() == path => {
+                    hashed += 1;
+                    let dat = AnlzPath::for_content(&content, number).map(|p| p.dat());
+                    named += usize::from(
+                        dat.is_some_and(|dat| dat.as_str() == format!("{path}/{name}")),
+                    );
+                }
+                _ if id_derived(&folder) => {
+                    own += 1;
+                    continue;
+                }
+                Some(_) => mismatched += 1,
+                None => not_content += 1,
+            }
+            numbers.entry((stick, folder)).or_default().push(number);
+        }
+    }
+    // The numbers of each folder's files, sorted, and how many folders hold them: rekordbox
+    // keeps a number once given, so a folder can hold `0001` without `0000`.
+    let mut shapes: BTreeMap<Vec<u16>, usize> = BTreeMap::new();
+    for mut list in numbers.into_values() {
+        list.sort_unstable();
+        *shapes.entry(list).or_default() += 1;
+    }
+    eprintln!(
+        "{sticks} sticks: {hashed} .DAT files in their PPTH's hashed folder ({named} named \
+         as for_content names them), {mismatched} elsewhere, {own} in id-derived folders \
+         (skipped), {not_content} whose PPTH is not a content path (not checked); folders by \
+         the numbers of their files {shapes:?}"
+    );
+    assert!(hashed > 0, "some .DAT files are checked");
+    assert_eq!(mismatched, 0, ".DAT files outside their hashed folder");
+    assert_eq!(named, hashed, "file names as for_content gives them");
 }
 
 /// A character as the survey may show it: ASCII punctuation as is, the rest by class.

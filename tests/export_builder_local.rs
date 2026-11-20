@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use cdj_media::anlz::{AnlzFile, CueSpan, HotCueSlot};
 use cdj_media::encoding::Millis;
 use cdj_media::export::{AudioFormat, ExportBuilder, ExportDate, Grid, NewTrack, Waveform};
-use cdj_media::layout::{AnlzPath, export_pdb_path};
+use cdj_media::layout::{StickPath, export_pdb_path};
 use cdj_media::pdb::model::Track;
 use cdj_media::pdb::{Database, FileType, Pdb, TrackFields};
 
@@ -118,8 +118,7 @@ macro_rules! differing_fields {
 
 /// The fields of the tracks that differ between `rebuilt` and `fixture`, by name, with the
 /// number of tracks; a track one of them lacks counts as `missing track`. Each track is
-/// compared whole, as the fields of its row, once the documented difference, the analysis
-/// path, is counted and taken out; the names only say where a difference is.
+/// compared whole, as the fields of its row; the names only say where a difference is.
 fn track_differences(rebuilt: &Database, fixture: &Database) -> BTreeMap<&'static str, usize> {
     let mut out = BTreeMap::new();
     for f in fixture.tracks() {
@@ -127,11 +126,7 @@ fn track_differences(rebuilt: &Database, fixture: &Database) -> BTreeMap<&'stati
             *out.entry("missing track").or_insert(0) += 1;
             continue;
         };
-        let (r, mut f) = (r.to_fields(), f.to_fields());
-        if r.analysis_path != f.analysis_path {
-            *out.entry("analysis_path").or_insert(0) += 1;
-            f.analysis_path.clone_from(&r.analysis_path);
-        }
+        let (r, f) = (r.to_fields(), f.to_fields());
         if r != f {
             differing_fields!(r, f, out;
                 sample_rate, composer_id, file_size, artwork_id, key_id, original_artist_id,
@@ -180,10 +175,10 @@ fn table_differences(rebuilt: &Database, fixture: &Database) -> Vec<&'static str
 
 /// ADR-018's acceptance test:
 /// - the builder gives every track rekordbox's id;
-/// - the 6 `.DAT` files come back byte for byte, at the builder's paths;
-/// - the rebuilt `export.pdb` loads to a `Database` equal to the fixture's except for the
-///   analysis path (slot 14), derived from the id instead of hashed. The duration, the
-///   other documented difference, can't differ: each track is given its row's whole
+/// - the 6 `.DAT` files come back byte for byte, at the rebuilt rows' analysis paths;
+/// - the rebuilt `export.pdb` loads to a `Database` equal to the fixture's, analysis paths
+///   (slot 14) included: they are hashed as rekordbox hashes them (ADR-019). The duration,
+///   the one documented difference left, can't differ: each track is given its row's whole
 ///   seconds.
 #[test]
 fn export_builder_rebuilds_the_fresh_export() {
@@ -221,13 +216,15 @@ fn export_builder_rebuilds_the_fresh_export() {
     }
     let export = builder.build().expect("builds");
 
+    let rebuilt = load(export.file(&export_pdb_path()).expect("export.pdb"));
     let identical = dats
         .iter()
         .filter(|(id, bytes)| {
-            export.file(&AnlzPath::for_track(*id).dat()) == Some(bytes.as_slice())
+            let row = rebuilt.track(*id).expect("the rebuilt row");
+            let path = StickPath::parse(row.analysis_path()).expect("a stick path");
+            export.file(&path) == Some(bytes.as_slice())
         })
         .count();
-    let rebuilt = load(export.file(&export_pdb_path()).expect("export.pdb"));
     let tracks = track_differences(&rebuilt, &fixture);
     let tables = table_differences(&rebuilt, &fixture);
     eprintln!(
@@ -242,8 +239,7 @@ fn export_builder_rebuilds_the_fresh_export() {
 
     assert_eq!(moved_ids, 0, "track ids");
     assert_eq!((dats.len(), identical), (6, 6), ".DAT files identical");
-    let documented = BTreeMap::from([("analysis_path", 6)]);
-    assert_eq!(tracks, documented, "only ADR-018's documented differences");
+    assert_eq!(tracks, BTreeMap::new(), "track fields that differ");
     assert!(tables.is_empty(), "tables that differ: {tables:?}");
     // 1 export.pdb, 6 .DAT files, 5 artwork images.
     assert_eq!(export.files().count(), 1 + 6 + 5);
