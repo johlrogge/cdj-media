@@ -68,11 +68,22 @@ fixture `hw-runs/b2-nxs`).
   PWAV/PWV2 placeholder.
 - **Phase 1 works on both players:** a stick built only by cdj-media (image B3) works end to
   end on the CDJ-2000NXS and the CDJ-2000.
-- **None of the missing files are needed:** the NXS works without `.EXT`, `exportExt.pdb`,
+- **None of the missing files are needed for loading, grids or cues:** the NXS works without `.EXT`, `exportExt.pdb`,
   `USBMNG.DAT` or setting files.
+
+## Image B4
+
+Built the same way as B3, from MDMA's re-export after its downbeat fix. MDMA's
+`first_beat_ms` is now beat 1 of the bar, and the playlist has 6 tracks (the test track
+was dropped). The local comparison asserts that the grids agree with rekordbox's bar
+positions and are within 1 ms. The B3 run's write-back is in `hw-runs/b3-nxs-2000`; the
+players wrote no analysis of their own.
+
+**Result (NXS):** works.
+- On track 1, the bar counter is in line with the beats.
+- There is no large waveform. The NXS draws it from PWV3 in the `.EXT`, and we don't
+  write `.EXT` yet, so the NXS does read PWV3. This leads to ADR-020.
 
 ## Still open
 
-- **Grid bars:** MDMA's `first_beat_ms` isn't always the downbeat, so the bar counter
-  should be off on 4 of 6 tracks. This hasn't been checked on the player.
 - **A collision** (`ANLZ0001`) on hardware.
