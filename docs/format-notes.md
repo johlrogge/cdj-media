@@ -491,13 +491,15 @@ is also their id in the built export.
 | bar positions     | 2     | 4      | -          |
 
 - **The audio files are not rekordbox's.** Tracks 1, 2 and 6 are 24-bit on both sticks and
-  MDMA's files are 52 bytes larger each (presumably other header chunks; the frame counts
-  agree to the whole second). Tracks 3, 4 and 5
-  are 16-bit on the rekordbox stick and 24-bit in MDMA's export, about 50% larger: MDMA
-  wrote new files. So file size and depth are expected to differ.
+  MDMA's files are 52 bytes larger each. MDMA's own probe found these are the BPM and key
+  tags it adds, as TXXX frames. Tracks 3, 4 and 5 are 16-bit on the rekordbox stick and
+  24-bit in MDMA's export, about 50% larger, because MDMA always writes 24-bit (being
+  fixed). So file size and depth are expected to differ.
 - **Duration:** tracks 3 and 4, two of the converted files, are exactly 456,000 and 288,000
-  ms long, 1 s more than rekordbox's rows (455 and 287 s); the conversion seems to pad to a
-  whole second. The other 4 agree in whole seconds.
+  ms long, 1 s more than rekordbox's rows (455 and 287 s). MDMA's probe found the padding
+  is in its source FLACs, and ffmpeg copies them sample for sample. rekordbox imported
+  different copies of those tracks, so this is not a conversion artefact. The other 4
+  agree in whole seconds.
 - **Bitrate:** rekordbox writes `rate · depth · channels / 1000`, rounded down (2,116 for
   24-bit stereo, 1,411 for 16-bit). The XML's `BitRate` matches that on 1 track only; the
   other 5 (803 to 1,560 kbps for 24-bit AIFF) are unexplained, perhaps the bitrates of
