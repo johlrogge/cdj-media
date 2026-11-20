@@ -1,6 +1,6 @@
-# Hardware runs B and B2: a stick built from MDMA, no rekordbox
+# Hardware runs B, B2 and B3: a stick built from MDMA, no rekordbox
 
-**Date:** 2026-11-20. **Player:** CDJ-2000NXS. **Stick:** `CDJ_RB_HW1`, wiped of `PIONEER/` and
+**Date:** 2026-11-20. **Players:** CDJ-2000NXS (B, B2, B3) and CDJ-2000 (B3). **Stick:** `CDJ_RB_HW1`, wiped of `PIONEER/` and
 `Contents/` first.
 
 ## Image B
@@ -54,6 +54,9 @@ from rekordbox or from the player.
 - All 6 real tracks show our BPM, grid and cues, with the flat waveform.
 - No track was analysed on the player.
 
+**Result (CDJ-2000, quick test):** behaves the same as the NXS. It has no large waveform
+(the player doesn't draw one), and the overview is our flat placeholder.
+
 In run B2, the NXS had written its own analysis only for the two control tracks (local
 fixture `hw-runs/b2-nxs`).
 
@@ -63,7 +66,8 @@ fixture `hw-runs/b2-nxs`).
   to ADR-019.
 - **The NXS accepts all of our `.DAT`:** PPTH, the zero PVBR, PQTZ, PCOB and the flat
   PWAV/PWV2 placeholder.
-- **Phase 1 works on the NXS:** a stick built only by cdj-media (image B3) works end to end.
+- **Phase 1 works on both players:** a stick built only by cdj-media (image B3) works end to
+  end on the CDJ-2000NXS and the CDJ-2000.
 - **None of the missing files are needed:** the NXS works without `.EXT`, `exportExt.pdb`,
   `USBMNG.DAT` or setting files.
 
@@ -72,4 +76,3 @@ fixture `hw-runs/b2-nxs`).
 - **Grid bars:** MDMA's `first_beat_ms` isn't always the downbeat, so the bar counter
   should be off on 4 of 6 tracks. This hasn't been checked on the player.
 - **A collision** (`ANLZ0001`) on hardware.
-- **The CDJ-2000.**
