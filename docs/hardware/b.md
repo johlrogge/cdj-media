@@ -43,12 +43,27 @@ folders and served as the control.
 | 1, 3, 4, 5 | Our BPM and grid; hot and memory cues where they should be; flat waveform (our placeholder) |
 | 2, 6 | No BPM; the NXS started analysing |
 
+## Image B3
+
+Built the same way as image B, but with ADR-019's hashed analysis paths (feature branch
+`anlz-path-hash`, commit `ff35bd3`). All 7 `.DAT`s are at their hashed folders. For the 5
+tracks the NXS played in run B, those are exactly the folders it chose. Nothing is copied
+from rekordbox or from the player.
+
+**Result (NXS):** works as expected.
+- All 6 real tracks show our BPM, grid and cues, with the flat waveform.
+- No track was analysed on the player.
+
+In run B2, the NXS had written its own analysis only for the two control tracks (local
+fixture `hw-runs/b2-nxs`).
+
 ## What this settles
 
 - **The NXS ignores slot 14.** It finds the analysis by hashing the audio path, which leads
   to ADR-019.
 - **The NXS accepts all of our `.DAT`:** PPTH, the zero PVBR, PQTZ, PCOB and the flat
   PWAV/PWV2 placeholder.
+- **Phase 1 works on the NXS:** a stick built only by cdj-media (image B3) works end to end.
 - **None of the missing files are needed:** the NXS works without `.EXT`, `exportExt.pdb`,
   `USBMNG.DAT` or setting files.
 
@@ -56,6 +71,5 @@ folders and served as the control.
 
 - **Grid bars:** MDMA's `first_beat_ms` isn't always the downbeat, so the bar counter
   should be off on 4 of 6 tracks. This hasn't been checked on the player.
-- **A rebuilt image B** with ADR-019 paths.
 - **A collision** (`ANLZ0001`) on hardware.
 - **The CDJ-2000.**
